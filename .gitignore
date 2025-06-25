@@ -1,0 +1,6 @@
+# Test outputs
+*.test
+*.out
+coverage.out
+coverage.html
+test-results/

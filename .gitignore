@@ -4,3 +4,10 @@
 coverage.out
 coverage.html
 test-results/
+
+# Support files
+shared-repos/
+heimdall-collector
+heimdall-cloner
+heimdall-scanner
+heimdall-cleaner

@@ -66,27 +66,54 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
-	// Create Elasticsearch client
+	// Create Elasticsearch client with retry logic
 	esConfig := elasticsearch.Config{
 		Addresses: []string{cfg.ElasticsearchURL},
 	}
-	esClient, err := elasticsearch.NewClient(esConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Elasticsearch client: %w", err)
+	
+	var esClient *elasticsearch.Client
+	var err error
+	
+	// Retry connection to Elasticsearch
+	maxRetries := 10
+	retryDelay := 5 * time.Second
+	
+	for i := 0; i < maxRetries; i++ {
+		esClient, err = elasticsearch.NewClient(esConfig)
+		if err != nil {
+			log.Printf("Failed to create Elasticsearch client (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i < maxRetries-1 {
+				time.Sleep(retryDelay)
+				continue
+			}
+			return nil, fmt.Errorf("failed to create Elasticsearch client after %d attempts: %w", maxRetries, err)
+		}
+		
+		// Test Elasticsearch connection
+		res, err := esClient.Info()
+		if err != nil {
+			log.Printf("Failed to connect to Elasticsearch (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i < maxRetries-1 {
+				time.Sleep(retryDelay)
+				continue
+			}
+			return nil, fmt.Errorf("failed to connect to Elasticsearch after %d attempts: %w", maxRetries, err)
+		}
+		defer res.Body.Close()
+		
+		if res.IsError() {
+			log.Printf("Elasticsearch returned error (attempt %d/%d): %s", i+1, maxRetries, res.String())
+			if i < maxRetries-1 {
+				time.Sleep(retryDelay)
+				continue
+			}
+			return nil, fmt.Errorf("Elasticsearch returned error after %d attempts: %s", maxRetries, res.String())
+		}
+		
+		// Connection successful
+		log.Printf("Connected to Elasticsearch successfully on attempt %d", i+1)
+		break
 	}
-
-	// Test Elasticsearch connection
-	res, err := esClient.Info()
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Elasticsearch: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		return nil, fmt.Errorf("Elasticsearch returned error: %s", res.String())
-	}
-
-	log.Printf("Connected to Elasticsearch successfully")
 
 	indexer := &Indexer{
 		config:      cfg,
@@ -133,7 +160,8 @@ func (i *Indexer) Start(ctx context.Context) error {
 	wg.Wait()
 
 	// Final flush of any remaining documents
-	i.flushBulkBuffer(ctx)
+	log.Printf("Performing final flush before shutdown")
+	i.flushBulkBuffer(context.Background()) // Use background context to ensure flush completes
 
 	log.Println("All indexer workers have stopped")
 	return nil
@@ -243,16 +271,21 @@ func (i *Indexer) indexRepository(ctx context.Context, workerID int, scannedRepo
 // addToBulkBuffer adds a document to the bulk buffer
 func (i *Indexer) addToBulkBuffer(ctx context.Context, index, id string, doc interface{}) {
 	i.bufferMutex.Lock()
-	defer i.bufferMutex.Unlock()
-
+	
 	i.bulkBuffer = append(i.bulkBuffer, BulkDocument{
 		Index:    index,
 		ID:       id,
 		Document: doc,
 	})
+	
+	log.Printf("Added document to buffer. Buffer size: %d/%d", len(i.bulkBuffer), i.config.BulkSize)
+	
+	shouldFlush := len(i.bulkBuffer) >= i.config.BulkSize
+	i.bufferMutex.Unlock()
 
 	// Flush if buffer is full
-	if len(i.bulkBuffer) >= i.config.BulkSize {
+	if shouldFlush {
+		log.Printf("Buffer full, triggering flush")
 		i.flushBulkBuffer(ctx)
 	}
 }
@@ -263,6 +296,7 @@ func (i *Indexer) flushBulkBuffer(ctx context.Context) {
 	defer i.bufferMutex.Unlock()
 
 	if len(i.bulkBuffer) == 0 {
+		log.Printf("Flush called but buffer is empty")
 		return
 	}
 
@@ -303,14 +337,30 @@ func (i *Indexer) flushBulkBuffer(ctx context.Context) {
 	defer res.Body.Close()
 
 	if res.IsError() {
-		log.Printf("Bulk request failed: %s", res.String())
+		var errorResponse map[string]interface{}
+		if err := json.NewDecoder(res.Body).Decode(&errorResponse); err != nil {
+			log.Printf("Bulk request failed: %s", res.String())
+		} else {
+			log.Printf("Bulk request failed: %v", errorResponse)
+		}
 		return
 	}
 
+	// Parse response to check for individual errors
+	var bulkResponse map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&bulkResponse); err != nil {
+		log.Printf("Failed to parse bulk response: %v", err)
+	} else {
+		if errors, ok := bulkResponse["errors"].(bool); ok && errors {
+			log.Printf("Bulk request had errors: %v", bulkResponse)
+		}
+	}
+
 	// Clear the buffer
+	docCount := len(i.bulkBuffer)
 	i.bulkBuffer = i.bulkBuffer[:0]
 
-	log.Printf("Successfully indexed documents to Elasticsearch")
+	log.Printf("Successfully indexed %d documents to Elasticsearch", docCount)
 }
 
 // startFlushTimer starts a timer to periodically flush the bulk buffer

@@ -219,16 +219,19 @@ func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]coll
 		fmt.Sprintf("file://%s", repoDir),
 		"--json",
 		"--concurrency", fmt.Sprintf("%d", s.config.TruffleHogConcurrency),
+		"--no-update",
 	}
-
 
 	if s.config.TruffleHogOnlyVerified {
 		args = append(args, "--only-verified")
 	}
 
+	// Log the scan command for debugging
+	log.Printf("Running TruffleHog scan on all branches in: %s", repoDir)
+
 	// Create command
 	cmd := exec.CommandContext(ctx, "trufflehog", args...)
-	
+
 	// Capture output
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
@@ -253,7 +256,7 @@ func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]coll
 	// Parse JSON output line by line (TruffleHog outputs JSON lines)
 	var findings []collector.KingfisherFinding
 	scanner := bufio.NewScanner(&stdoutBuf)
-	
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -297,28 +300,28 @@ type TruffleHogResult struct {
 	SourceMetadata struct {
 		Data struct {
 			Git struct {
-				Commit string `json:"commit"`
-				File   string `json:"file"`
-				Email  string `json:"email"`
+				Commit     string `json:"commit"`
+				File       string `json:"file"`
+				Email      string `json:"email"`
 				Repository string `json:"repository"`
-				Timestamp string `json:"timestamp"`
-				Line   int    `json:"line"`
+				Timestamp  string `json:"timestamp"`
+				Line       int    `json:"line"`
 			} `json:"Git"`
 		} `json:"Data"`
 	} `json:"SourceMetadata"`
-	SourceID     int    `json:"SourceID"`
-	SourceType   int    `json:"SourceType"`
-	SourceName   string `json:"SourceName"`
-	DetectorType int    `json:"DetectorType"`
-	DetectorName string `json:"DetectorName"`
-	DecoderName  string `json:"DecoderName"`
-	Verified     bool   `json:"Verified"`
-	Raw          string `json:"Raw"`
-	RawV2        string `json:"RawV2"`
-	Redacted     string `json:"Redacted"`
-	ExtraData    map[string]string `json:"ExtraData"`
-	StructuredData interface{} `json:"StructuredData"`
-	VerificationError string `json:"VerificationError"`
+	SourceID          int               `json:"SourceID"`
+	SourceType        int               `json:"SourceType"`
+	SourceName        string            `json:"SourceName"`
+	DetectorType      int               `json:"DetectorType"`
+	DetectorName      string            `json:"DetectorName"`
+	DecoderName       string            `json:"DecoderName"`
+	Verified          bool              `json:"Verified"`
+	Raw               string            `json:"Raw"`
+	RawV2             string            `json:"RawV2"`
+	Redacted          string            `json:"Redacted"`
+	ExtraData         map[string]string `json:"ExtraData"`
+	StructuredData    interface{}       `json:"StructuredData"`
+	VerificationError string            `json:"VerificationError"`
 }
 
 // handleScanError creates a failed scan result and pushes it to the queue

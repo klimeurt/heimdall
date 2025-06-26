@@ -13,21 +13,22 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/klimeurt/heimdall/internal/collector"
-	"github.com/klimeurt/heimdall/internal/config"
+	internalConfig "github.com/klimeurt/heimdall/internal/config"
 	"github.com/redis/go-redis/v9"
 )
 
 // Cloner handles the repository cloning operations
 type Cloner struct {
-	config      *config.ClonerConfig
+	config      *internalConfig.ClonerConfig
 	redisClient *redis.Client
 	auth        *http.BasicAuth
 }
 
 // New creates a new Cloner instance
-func New(cfg *config.ClonerConfig) (*Cloner, error) {
+func New(cfg *internalConfig.ClonerConfig) (*Cloner, error) {
 	// Create Redis client
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
@@ -150,9 +151,11 @@ func (c *Cloner) processRepository(ctx context.Context, workerID int, repo *coll
 	// Construct repository URL
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", repo.Org, repo.Name)
 
-	// Clone options
+	// Clone options - explicitly set SingleBranch to false to fetch all branches
 	cloneOptions := &git.CloneOptions{
-		URL: repoURL,
+		URL:          repoURL,
+		SingleBranch: false,  // Fetch all branches
+		Tags:         git.AllTags,  // Fetch all tags as well
 	}
 
 	// Add authentication if available
@@ -170,11 +173,17 @@ func (c *Cloner) processRepository(ctx context.Context, workerID int, repo *coll
 	clonePath := filepath.Join(c.config.SharedVolumeDir, fmt.Sprintf("%s_%s_%s", repo.Org, repo.Name, uuid))
 
 	// Clone repository to disk
-	_, err = git.PlainCloneContext(ctx, clonePath, false, cloneOptions)
+	gitRepo, err := git.PlainCloneContext(ctx, clonePath, false, cloneOptions)
 	if err != nil {
 		// Clean up directory if clone fails
 		os.RemoveAll(clonePath)
 		return fmt.Errorf("failed to clone repository: %w", err)
+	}
+
+	// Fetch all remote branches to ensure they're available for scanning
+	if err := c.fetchAllBranches(ctx, gitRepo, workerID, repo); err != nil {
+		log.Printf("Worker %d: Warning - failed to fetch all branches for %s/%s: %v", workerID, repo.Org, repo.Name, err)
+		// Continue even if fetching all branches fails
 	}
 
 	// Create processed repository data
@@ -207,6 +216,63 @@ func (c *Cloner) Close() {
 	if c.redisClient != nil {
 		c.redisClient.Close()
 	}
+}
+
+// fetchAllBranches fetches all remote branches and creates local tracking branches
+func (c *Cloner) fetchAllBranches(ctx context.Context, repo *git.Repository, workerID int, repoInfo *collector.Repository) error {
+	// Get all remotes
+	remotes, err := repo.Remotes()
+	if err != nil {
+		return fmt.Errorf("failed to get remotes: %w", err)
+	}
+
+	if len(remotes) == 0 {
+		return fmt.Errorf("no remotes found")
+	}
+
+	// Get the origin remote
+	origin := remotes[0]
+
+	// List all references from the remote
+	refs, err := origin.List(&git.ListOptions{
+		Auth: c.auth,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list remote references: %w", err)
+	}
+
+	// Count branches for logging
+	branchCount := 0
+	for _, ref := range refs {
+		if ref.Name().IsBranch() {
+			branchCount++
+		}
+	}
+
+	log.Printf("Worker %d: Found %d branches in repository %s/%s", workerID, branchCount, repoInfo.Org, repoInfo.Name)
+
+	// Fetch all branches
+	fetchOptions := &git.FetchOptions{
+		RefSpecs: []config.RefSpec{
+			config.RefSpec("+refs/heads/*:refs/remotes/origin/*"),
+		},
+		Tags: git.AllTags,
+	}
+
+	if c.auth != nil {
+		fetchOptions.Auth = c.auth
+	}
+
+	// Perform fetch
+	err = repo.FetchContext(ctx, fetchOptions)
+	if err != nil && err != git.NoErrAlreadyUpToDate {
+		return fmt.Errorf("failed to fetch branches: %w", err)
+	}
+
+	// Log success
+	log.Printf("Worker %d: Successfully fetched all %d branches for %s/%s", workerID, branchCount, repoInfo.Org, repoInfo.Name)
+
+	return nil
 }
 
 // generateUUID generates a random UUID string

@@ -23,6 +23,7 @@ make build-all
 make build-collector
 make build-cloner
 make build-scanner
+make build-cleaner
 
 # Build Docker images
 make docker-build        # all images
@@ -57,6 +58,10 @@ make test-all
 go test -v ./internal/collector/...
 go test -v ./internal/cloner/...
 go test -v ./internal/scanner/...
+
+# Generate coverage reports
+make test-coverage      # Unit tests only
+make test-coverage-all  # All tests including integration
 ```
 
 ### Running Locally
@@ -74,6 +79,23 @@ make run-cleaner    # or go run ./cmd/cleaner
 make run-monitor    # or go run ./cmd/monitor
 ```
 
+### Docker Compose
+```bash
+# Set required environment variables
+export GITHUB_ORG=your-org-name
+export GITHUB_TOKEN=your-github-token  # Optional for public repos
+
+# Start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f collector
+docker-compose logs -f scanner
+
+# Stop all services
+docker-compose down
+```
+
 ### Code Quality
 ```bash
 # Format code
@@ -87,7 +109,6 @@ make ci              # lint, test, build-all, docker-build
 make ci-integration  # includes integration tests
 
 # Other commands
-make fmt             # Format code
 make deps            # Install/update dependencies
 make clean           # Clean build artifacts
 ```
@@ -128,8 +149,8 @@ All processing services use concurrent worker pools:
 ### Queue Message Flow
 1. Collector → `clone_queue`: `{"org": "name", "name": "repo"}`
 2. Cloner → `processed_queue`: Adds processing metadata and `clone_path`
-3. Scanner → `secrets_queue`: Adds scan results with validated secrets and `verification_error` field
-4. Scanner → `cleanup_queue`: Sends cleanup job with `clone_path`, `repo_name`, and `created_at`
+3. Scanner → `secrets_queue`: Adds scan results with validated secrets
+4. Scanner → `cleanup_queue`: Sends cleanup job with `clone_path` and metadata
 5. Cleaner: Consumes from `cleanup_queue` and removes directories
 
 ### Error Handling
@@ -155,6 +176,7 @@ All processing services use concurrent worker pools:
 - Automatic cleanup prevents disk space exhaustion
 - TruffleHog concurrency configurable via `TRUFFLEHOG_CONCURRENCY`
 - Scanner supports `TRUFFLEHOG_ONLY_VERIFIED` to reduce noise
+- Cloner fetches ALL branches and tags for comprehensive scanning
 
 ### Redis Dependencies
 - All services require Redis connection
@@ -167,3 +189,11 @@ All processing services use concurrent worker pools:
 - Integration tests require actual Redis instance
 - CI runs on PRs (unit tests) and tags (build/push)
 - Test coverage available via `make test-coverage-all`
+- Tests expect Redis to be running locally
+
+### CI/CD Pipeline
+- GitHub Actions workflows for testing and deployment
+- PRs trigger unit tests only
+- Version tags (`v*`) trigger multi-platform Docker builds and push
+- Images pushed to GitHub Container Registry (`ghcr.io/klimeurt`)
+- Version automatically embedded from git tags

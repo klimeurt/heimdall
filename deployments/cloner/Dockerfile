@@ -23,20 +23,15 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     ./cmd/cloner
 
 # Final stage
-FROM alpine:latest
+FROM alpine:3.20
 
-# Install ca-certificates for HTTPS
-RUN apk add --no-cache ca-certificates
-
-# Create non-root user
-RUN addgroup -g 1000 cloner && \
+# Install git and ca-certificates for HTTPS and git operations
+RUN apk add --no-cache git ca-certificates && \
+    addgroup -g 1000 cloner && \
     adduser -D -s /bin/sh -u 1000 -G cloner cloner
 
 # Copy the binary
 COPY --from=builder /app/heimdall-cloner /heimdall-cloner
-
-# Set permissions
-RUN chmod +x /heimdall-cloner
 
 # Set user to non-root
 USER cloner:cloner

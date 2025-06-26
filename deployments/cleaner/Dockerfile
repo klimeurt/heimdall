@@ -22,17 +22,22 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o heimdall-cleaner \
     ./cmd/cleaner
 
-# Final stage
-FROM alpine:latest
+# Create user and group files for scratch container
+RUN echo "heimdall:x:1000:1000:heimdall:/:/bin/false" > /etc/passwd.minimal && \
+    echo "heimdall:x:1000:" > /etc/group.minimal
 
-# Install ca-certificates for HTTPS
-RUN apk add --no-cache ca-certificates
+# Final stage
+FROM scratch
+
+# Copy ca-certificates for HTTPS
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copy user and group files
+COPY --from=builder /etc/passwd.minimal /etc/passwd
+COPY --from=builder /etc/group.minimal /etc/group
 
 # Copy the binary
 COPY --from=builder /app/heimdall-cleaner /heimdall-cleaner
-
-# Create non-root user
-RUN adduser -D -u 1000 heimdall
 
 # Set user to non-root
 USER heimdall

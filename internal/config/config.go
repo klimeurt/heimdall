@@ -63,6 +63,20 @@ type CleanerConfig struct {
 	SharedVolumeDir   string
 }
 
+// IndexerConfig holds the indexer service configuration
+type IndexerConfig struct {
+	RedisHost            string
+	RedisPort            string
+	RedisPassword        string
+	RedisDB              int
+	SecretsQueueName     string
+	MaxConcurrentWorkers int
+	ElasticsearchURL     string
+	IndexName            string
+	BulkSize             int
+	BulkFlushInterval    time.Duration
+}
+
 // Load loads configuration from environment variables
 func Load() (*Config, error) {
 	cfg := &Config{
@@ -319,6 +333,85 @@ func LoadCleanerConfig() (*CleanerConfig, error) {
 			return nil, fmt.Errorf("MAX_CONCURRENT_JOBS must be greater than 0")
 		}
 		cfg.MaxConcurrentJobs = max
+	}
+
+	return cfg, nil
+}
+
+// LoadIndexerConfig loads indexer service configuration from environment variables
+func LoadIndexerConfig() (*IndexerConfig, error) {
+	cfg := &IndexerConfig{
+		RedisHost:        os.Getenv("REDIS_HOST"),
+		RedisPort:        os.Getenv("REDIS_PORT"),
+		RedisPassword:    os.Getenv("REDIS_PASSWORD"),
+		SecretsQueueName: os.Getenv("SECRETS_QUEUE_NAME"),
+		ElasticsearchURL: os.Getenv("ELASTICSEARCH_URL"),
+		IndexName:        os.Getenv("INDEX_NAME"),
+	}
+
+	// Set defaults
+	if cfg.RedisHost == "" {
+		cfg.RedisHost = "localhost"
+	}
+	if cfg.RedisPort == "" {
+		cfg.RedisPort = "6379"
+	}
+	if cfg.SecretsQueueName == "" {
+		cfg.SecretsQueueName = "secrets_queue"
+	}
+	if cfg.ElasticsearchURL == "" {
+		cfg.ElasticsearchURL = "http://localhost:9200"
+	}
+	if cfg.IndexName == "" {
+		cfg.IndexName = "heimdall-secrets"
+	}
+	cfg.MaxConcurrentWorkers = 2  // Default to 2 concurrent workers
+	cfg.BulkSize = 50             // Default bulk size
+	cfg.BulkFlushInterval = 10 * time.Second // Default flush interval
+
+	// Parse Redis DB
+	if redisDB := os.Getenv("REDIS_DB"); redisDB != "" {
+		db, err := strconv.Atoi(redisDB)
+		if err != nil {
+			return nil, fmt.Errorf("invalid REDIS_DB value: %v", err)
+		}
+		cfg.RedisDB = db
+	}
+
+	// Parse max concurrent workers
+	if maxWorkers := os.Getenv("MAX_CONCURRENT_WORKERS"); maxWorkers != "" {
+		max, err := strconv.Atoi(maxWorkers)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MAX_CONCURRENT_WORKERS value: %v", err)
+		}
+		if max <= 0 {
+			return nil, fmt.Errorf("MAX_CONCURRENT_WORKERS must be greater than 0")
+		}
+		cfg.MaxConcurrentWorkers = max
+	}
+
+	// Parse bulk size
+	if bulkSize := os.Getenv("BULK_SIZE"); bulkSize != "" {
+		size, err := strconv.Atoi(bulkSize)
+		if err != nil {
+			return nil, fmt.Errorf("invalid BULK_SIZE value: %v", err)
+		}
+		if size <= 0 {
+			return nil, fmt.Errorf("BULK_SIZE must be greater than 0")
+		}
+		cfg.BulkSize = size
+	}
+
+	// Parse bulk flush interval
+	if flushInterval := os.Getenv("BULK_FLUSH_INTERVAL"); flushInterval != "" {
+		duration, err := time.ParseDuration(flushInterval)
+		if err != nil {
+			return nil, fmt.Errorf("invalid BULK_FLUSH_INTERVAL value: %v", err)
+		}
+		if duration <= 0 {
+			return nil, fmt.Errorf("BULK_FLUSH_INTERVAL must be greater than 0")
+		}
+		cfg.BulkFlushInterval = duration
 	}
 
 	return cfg, nil

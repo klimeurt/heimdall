@@ -1,15 +1,17 @@
-.PHONY: build test run run-collector run-cloner run-scanner run-cleaner run-monitor docker-build docker-push clean
+.PHONY: build test run run-collector run-cloner run-scanner run-cleaner run-indexer run-monitor docker-build docker-push clean
 
 # Variables
 COLLECTOR_NAME := heimdall-collector
 CLONER_NAME := heimdall-cloner
 SCANNER_NAME := heimdall-scanner
 CLEANER_NAME := heimdall-cleaner
+INDEXER_NAME := heimdall-indexer
 DOCKER_REGISTRY := ghcr.io/klimeurt
 COLLECTOR_IMAGE := $(DOCKER_REGISTRY)/$(COLLECTOR_NAME)
 CLONER_IMAGE := $(DOCKER_REGISTRY)/$(CLONER_NAME)
 SCANNER_IMAGE := $(DOCKER_REGISTRY)/$(SCANNER_NAME)
 CLEANER_IMAGE := $(DOCKER_REGISTRY)/$(CLEANER_NAME)
+INDEXER_IMAGE := $(DOCKER_REGISTRY)/$(INDEXER_NAME)
 VERSION := $(shell git describe --tags --always --dirty)
 
 # Build binaries
@@ -32,8 +34,12 @@ build-scanner:
 build-cleaner:
 	go build -ldflags="-w -s -X main.Version=$(VERSION)" -o $(CLEANER_NAME) ./cmd/cleaner
 
+# Build indexer binary
+build-indexer:
+	go build -ldflags="-w -s -X main.Version=$(VERSION)" -o $(INDEXER_NAME) ./cmd/indexer
+
 # Build all binaries
-build-all: build-collector build-cloner build-scanner build-cleaner
+build-all: build-collector build-cloner build-scanner build-cleaner build-indexer
 
 # Run unit tests
 test:
@@ -76,6 +82,10 @@ run-scanner:
 run-cleaner:
 	go run ./cmd/cleaner
 
+# Run indexer locally
+run-indexer:
+	go run ./cmd/indexer
+
 # Run Redis queue monitor
 run-monitor:
 	go run ./cmd/monitor
@@ -104,8 +114,12 @@ docker-build-scanner:
 docker-build-cleaner:
 	docker build -f deployments/cleaner/Dockerfile -t $(CLEANER_IMAGE):$(VERSION) -t $(CLEANER_IMAGE):latest .
 
+# Docker build indexer
+docker-build-indexer:
+	docker build -f deployments/indexer/Dockerfile -t $(INDEXER_IMAGE):$(VERSION) -t $(INDEXER_IMAGE):latest .
+
 # Docker build all images
-docker-build: docker-build-collector docker-build-cloner docker-build-scanner docker-build-cleaner
+docker-build: docker-build-collector docker-build-cloner docker-build-scanner docker-build-cleaner docker-build-indexer
 
 # Docker push collector
 docker-push-collector: docker-build-collector
@@ -127,8 +141,13 @@ docker-push-cleaner: docker-build-cleaner
 	docker push $(CLEANER_IMAGE):$(VERSION)
 	docker push $(CLEANER_IMAGE):latest
 
+# Docker push indexer
+docker-push-indexer: docker-build-indexer
+	docker push $(INDEXER_IMAGE):$(VERSION)
+	docker push $(INDEXER_IMAGE):latest
+
 # Docker push all images
-docker-push: docker-push-collector docker-push-cloner docker-push-scanner docker-push-cleaner
+docker-push: docker-push-collector docker-push-cloner docker-push-scanner docker-push-cleaner docker-push-indexer
 
 
 # Install dependencies
@@ -138,7 +157,7 @@ deps:
 
 # Clean build artifacts
 clean:
-	rm -f $(COLLECTOR_NAME) $(CLONER_NAME) $(SCANNER_NAME) $(CLEANER_NAME)
+	rm -f $(COLLECTOR_NAME) $(CLONER_NAME) $(SCANNER_NAME) $(CLEANER_NAME) $(INDEXER_NAME)
 	rm -f coverage.out coverage.html
 	rm -f *.tgz
 

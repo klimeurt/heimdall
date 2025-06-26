@@ -6,6 +6,7 @@ volumes:
       type: none
       o: bind
       device: ${PWD}/shared-repos
+  elasticsearch-data:
 
 services:
   redis:
@@ -97,4 +98,34 @@ services:
     depends_on:
       - redis
       - init-volume
+    restart: unless-stopped
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    restart: unless-stopped
+
+  indexer:
+    build:
+      context: .
+      dockerfile: deployments/indexer/Dockerfile
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - INDEX_NAME=heimdall-secrets
+      - SECRETS_QUEUE_NAME=secrets_queue
+      - MAX_CONCURRENT_WORKERS=2
+      - BULK_SIZE=50
+      - BULK_FLUSH_INTERVAL=10s
+    depends_on:
+      - redis
+      - elasticsearch
     restart: unless-stopped

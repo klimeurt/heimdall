@@ -3,8 +3,10 @@ module github.com/klimeurt/heimdall
 go 1.24
 
 require (
+	github.com/elastic/go-elasticsearch/v8 v8.18.1
 	github.com/go-git/go-git/v5 v5.16.2
 	github.com/google/go-github/v57 v57.0.0
+	github.com/google/go-github/v73 v73.0.0
 	github.com/redis/go-redis/v9 v9.10.0
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/oauth2 v0.30.0
@@ -20,7 +22,6 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/elastic/elastic-transport-go/v8 v8.7.0 // indirect
-	github.com/elastic/go-elasticsearch/v8 v8.18.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.6.2 // indirect

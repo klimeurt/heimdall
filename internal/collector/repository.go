@@ -25,14 +25,14 @@ type ScannedRepository struct {
 	ScannedAt         time.Time           `json:"scanned_at"`
 	WorkerID          int                 `json:"worker_id"`
 	ValidSecretsFound int                 `json:"valid_secrets_found"`
-	ValidSecrets      []KingfisherFinding `json:"valid_secrets"`
+	ValidSecrets      []TruffleHogFinding `json:"valid_secrets"`
 	ScanStatus        string              `json:"scan_status"` // "success", "failed", "no_secrets", "timeout"
 	ScanDuration      time.Duration       `json:"scan_duration"`
 	ErrorMessage      string              `json:"error_message,omitempty"`
 }
 
-// KingfisherFinding represents a secret found by Kingfisher
-type KingfisherFinding struct {
+// TruffleHogFinding represents a secret found by TruffleHog
+type TruffleHogFinding struct {
 	SecretType  string `json:"secret_type"`
 	Description string `json:"description"`
 	File        string `json:"file"`

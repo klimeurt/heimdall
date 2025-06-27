@@ -72,7 +72,6 @@ services:
       - REDIS_PORT=6379
       - MAX_CONCURRENT_SCANS=3
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - KINGFISHER_BINARY_PATH=kingfisher
       - SCAN_TIMEOUT_MINUTES=30
       - SHARED_VOLUME_DIR=/shared/heimdall-repos
       - PROCESSED_QUEUE_NAME=processed_queue

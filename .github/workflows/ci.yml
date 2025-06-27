@@ -7,8 +7,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  COLLECTOR_IMAGE_NAME: klimeurt/heimdall
-  VALIDATOR_IMAGE_NAME: klimeurt/heimdall-validator
+  COLLECTOR_IMAGE_NAME: klimeurt/heimdall-collector
+  CLONER_IMAGE_NAME: klimeurt/heimdall-cloner
+  SCANNER_IMAGE_NAME: klimeurt/heimdall-scanner
+  CLEANER_IMAGE_NAME: klimeurt/heimdall-cleaner
+  INDEXER_IMAGE_NAME: klimeurt/heimdall-indexer
 
 jobs:
   build-and-push-collector:
@@ -76,8 +79,8 @@ jobs:
         annotations: |
           org.opencontainers.image.visibility=public
 
-  build-and-push-validator:
-    name: Build and Push Validator Docker Image
+  build-and-push-cloner:
+    name: Build and Push Cloner Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -116,27 +119,222 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract validator metadata
-      id: validator-meta
+    - name: Extract cloner metadata
+      id: cloner-meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.VALIDATOR_IMAGE_NAME }}
+        images: ${{ env.REGISTRY }}/${{ env.CLONER_IMAGE_NAME }}
         tags: |
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
           type=semver,pattern={{major}}
           type=raw,value=latest
 
-    - name: Build and push Validator Docker image
+    - name: Build and push Cloner Docker image
       uses: docker/build-push-action@v6
       with:
         context: .
-        file: deployments/validator/Dockerfile
+        file: deployments/cloner/Dockerfile
         platforms: linux/amd64,linux/arm64
         push: true
-        tags: ${{ steps.validator-meta.outputs.tags }}
-        labels: ${{ steps.validator-meta.outputs.labels }}
-        cache-from: type=gha,scope=validator
-        cache-to: type=gha,mode=max,scope=validator
+        tags: ${{ steps.cloner-meta.outputs.tags }}
+        labels: ${{ steps.cloner-meta.outputs.labels }}
+        cache-from: type=gha,scope=cloner
+        cache-to: type=gha,mode=max,scope=cloner
+        annotations: |
+          org.opencontainers.image.visibility=public
+
+  build-and-push-scanner:
+    name: Build and Push Scanner Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: make test
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract scanner metadata
+      id: scanner-meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.SCANNER_IMAGE_NAME }}
+        tags: |
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=raw,value=latest
+
+    - name: Build and push Scanner Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: deployments/scanner/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.scanner-meta.outputs.tags }}
+        labels: ${{ steps.scanner-meta.outputs.labels }}
+        cache-from: type=gha,scope=scanner
+        cache-to: type=gha,mode=max,scope=scanner
+        annotations: |
+          org.opencontainers.image.visibility=public
+
+  build-and-push-cleaner:
+    name: Build and Push Cleaner Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: make test
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract cleaner metadata
+      id: cleaner-meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.CLEANER_IMAGE_NAME }}
+        tags: |
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=raw,value=latest
+
+    - name: Build and push Cleaner Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: deployments/cleaner/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.cleaner-meta.outputs.tags }}
+        labels: ${{ steps.cleaner-meta.outputs.labels }}
+        cache-from: type=gha,scope=cleaner
+        cache-to: type=gha,mode=max,scope=cleaner
+        annotations: |
+          org.opencontainers.image.visibility=public
+
+  build-and-push-indexer:
+    name: Build and Push Indexer Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: make test
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract indexer metadata
+      id: indexer-meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.INDEXER_IMAGE_NAME }}
+        tags: |
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=raw,value=latest
+
+    - name: Build and push Indexer Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: deployments/indexer/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.indexer-meta.outputs.tags }}
+        labels: ${{ steps.indexer-meta.outputs.labels }}
+        cache-from: type=gha,scope=indexer
+        cache-to: type=gha,mode=max,scope=indexer
         annotations: |
           org.opencontainers.image.visibility=public

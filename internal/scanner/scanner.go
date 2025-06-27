@@ -22,8 +22,17 @@ import (
 // Scanner handles the repository secret scanning operations
 type Scanner struct {
 	config      *config.ScannerConfig
-	redisClient *redis.Client
+	redisClient RedisClient
 	auth        *http.BasicAuth
+}
+
+// RedisClient interface for Redis operations (allows mocking in tests)
+type RedisClient interface {
+	Ping(ctx context.Context) *redis.StatusCmd
+	LLen(ctx context.Context, key string) *redis.IntCmd
+	BRPop(ctx context.Context, timeout time.Duration, keys ...string) *redis.StringSliceCmd
+	LPush(ctx context.Context, key string, values ...interface{}) *redis.IntCmd
+	Close() error
 }
 
 // New creates a new Scanner instance
@@ -208,7 +217,7 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 }
 
 // runTruffleHogScan executes TruffleHog and parses results
-func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]collector.KingfisherFinding, error) {
+func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]collector.TruffleHogFinding, error) {
 	// Create temporary file for JSON output
 	outputFile := filepath.Join(repoDir, "trufflehog_results.json")
 	defer os.Remove(outputFile)
@@ -254,7 +263,7 @@ func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]coll
 	}
 
 	// Parse JSON output line by line (TruffleHog outputs JSON lines)
-	var findings []collector.KingfisherFinding
+	var findings []collector.TruffleHogFinding
 	scanner := bufio.NewScanner(&stdoutBuf)
 
 	for scanner.Scan() {
@@ -270,7 +279,7 @@ func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]coll
 		}
 
 		// Convert to our finding format
-		finding := collector.KingfisherFinding{
+		finding := collector.TruffleHogFinding{
 			SecretType:  result.DetectorName,
 			Description: fmt.Sprintf("Found %s secret", result.DetectorName),
 			File:        result.SourceMetadata.Data.Git.File,
@@ -341,7 +350,7 @@ func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRe
 		ScannedAt:         time.Now(),
 		WorkerID:          workerID,
 		ValidSecretsFound: 0,
-		ValidSecrets:      []collector.KingfisherFinding{},
+		ValidSecrets:      []collector.TruffleHogFinding{},
 		ScanStatus:        status,
 		ScanDuration:      time.Since(startTime),
 		ErrorMessage:      err.Error(),

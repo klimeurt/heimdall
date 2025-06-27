@@ -75,7 +75,7 @@ make run-cloner     # or go run ./cmd/cloner
 make run-scanner    # or go run ./cmd/scanner
 make run-cleaner    # or go run ./cmd/cleaner
 
-# Monitor queues
+# Monitor queues and disk space
 make run-monitor    # or go run ./cmd/monitor
 ```
 

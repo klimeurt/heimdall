@@ -7,6 +7,7 @@ test-results/
 
 # Support files
 shared-repos/
+monitor
 heimdall-collector
 heimdall-cloner
 heimdall-scanner

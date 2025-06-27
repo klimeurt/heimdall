@@ -31,6 +31,10 @@ graph TB
         ES[(Elasticsearch)]
     end
     
+    subgraph "Visualization"
+        KB[Kibana]
+    end
+    
     subgraph "Redis Queues"
         Q1{{clone_queue}}
         Q2{{processed_queue}}
@@ -51,6 +55,7 @@ graph TB
     Q4 -->|Pull jobs| CLE
     CLE -->|Remove repos| SV
     IDX -->|Index findings| ES
+    ES -->|Visualize data| KB
     
     style COL fill:#4A90E2
     style CLO fill:#4A90E2
@@ -61,6 +66,7 @@ graph TB
     style SV fill:#F5A623
     style ES fill:#005571
     style GH fill:#333
+    style KB fill:#F04E98
 ```
 
 ### Data Flow

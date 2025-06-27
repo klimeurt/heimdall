@@ -15,6 +15,24 @@ services:
       - "6379:6379"
     restart: unless-stopped
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
   # Initialize shared volume permissions
   init-volume:
     image: alpine:latest
@@ -26,23 +44,6 @@ services:
         chown -R 1000:1000 /shared/heimdall-repos &&
         chmod -R 755 /shared/heimdall-repos
       "
-    
-  cloner:
-    build:
-      context: .
-      dockerfile: deployments/cloner/Dockerfile
-    volumes:
-      - ./shared-repos:/shared/heimdall-repos
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - MAX_CONCURRENT_CLONES=5
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - SHARED_VOLUME_DIR=/shared/heimdall-repos
-    depends_on:
-      - redis
-      - init-volume
-    restart: unless-stopped
 
   collector:
     build:
@@ -59,6 +60,23 @@ services:
       - COLLECTION_SCHEDULE=${COLLECTION_SCHEDULE:-0 0 * * 0}
     depends_on:
       - redis
+    restart: unless-stopped
+
+  cloner:
+    build:
+      context: .
+      dockerfile: deployments/cloner/Dockerfile
+    volumes:
+      - ./shared-repos:/shared/heimdall-repos
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MAX_CONCURRENT_CLONES=3
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - SHARED_VOLUME_DIR=/shared/heimdall-repos
+    depends_on:
+      - redis
+      - init-volume
     restart: unless-stopped
 
   scanner:
@@ -82,41 +100,6 @@ services:
       - init-volume
     restart: unless-stopped
 
-  cleaner:
-    build:
-      context: .
-      dockerfile: deployments/cleaner/Dockerfile
-    volumes:
-      - ./shared-repos:/shared/heimdall-repos
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CLEANUP_QUEUE_NAME=cleanup_queue
-      - SHARED_VOLUME_DIR=/shared/heimdall-repos
-      - MAX_CONCURRENT_JOBS=2
-    depends_on:
-      - redis
-      - init-volume
-    restart: unless-stopped
-
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    ports:
-      - "9200:9200"
-    volumes:
-      - elasticsearch-data:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    restart: unless-stopped
-
   indexer:
     build:
       context: .
@@ -135,4 +118,21 @@ services:
         condition: service_started
       elasticsearch:
         condition: service_healthy
+    restart: unless-stopped
+
+  cleaner:
+    build:
+      context: .
+      dockerfile: deployments/cleaner/Dockerfile
+    volumes:
+      - ./shared-repos:/shared/heimdall-repos
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CLEANUP_QUEUE_NAME=cleanup_queue
+      - SHARED_VOLUME_DIR=/shared/heimdall-repos
+      - MAX_CONCURRENT_JOBS=2
+    depends_on:
+      - redis
+      - init-volume
     restart: unless-stopped

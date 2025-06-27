@@ -12,6 +12,10 @@ Five microservices communicating through Redis queues:
 - **Indexer**: Indexes scan results to Elasticsearch for search and analysis
 
 ```mermaid
+---
+config:
+  theme: 'neutral'
+---
 graph TB
     subgraph "GitHub"
         GH[GitHub API]

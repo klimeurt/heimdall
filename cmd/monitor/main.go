@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,35 +21,32 @@ import (
 
 // MonitorConfig holds the monitor configuration
 type MonitorConfig struct {
-	RedisHost           string
-	RedisPort           string
-	RedisPassword       string
-	RedisDB             int
-	RefreshRate         time.Duration
-	CloneQueueName      string
-	ProcessedQueueName  string
-	SecretsQueueName    string
-	CleanupQueueName    string
-	SharedVolumeDir     string
+	RedisHost       string
+	RedisPort       string
+	RedisPassword   string
+	RedisDB         int
+	RefreshRate     time.Duration
+	QueuePattern    string // Pattern to match queue names (e.g., "*_queue")
+	SharedVolumeDir string
 }
 
 // QueueStats holds statistics for a Redis queue
 type QueueStats struct {
-	Name         string
-	Length       int64
-	Rate         float64 // items per minute
-	LastLength   int64
-	LastCheck    time.Time
-	RecentItems  []string
+	Name        string
+	Length      int64
+	Rate        float64 // items per minute
+	LastLength  int64
+	LastCheck   time.Time
+	RecentItems []string
 }
 
 // FolderStats holds statistics for the shared volume folder
 type FolderStats struct {
-	TotalSize     int64
-	RepoCount     int
-	LastSize      int64
-	LastCheck     time.Time
-	GrowthRate    float64 // MB per minute
+	TotalSize  int64
+	RepoCount  int
+	LastSize   int64
+	LastCheck  time.Time
+	GrowthRate float64 // MB per minute
 }
 
 // Monitor holds the monitor state
@@ -59,6 +57,7 @@ type Monitor struct {
 	folderStats *FolderStats
 	statsMutex  sync.RWMutex
 	startTime   time.Time
+	knownQueues []string // Dynamically discovered queues
 }
 
 // ProcessedRepository represents a processed repository
@@ -89,28 +88,18 @@ func main() {
 
 	// Create monitor
 	monitor := &Monitor{
-		client:    redisClient,
-		config:    cfg,
-		stats:     make(map[string]*QueueStats),
+		client: redisClient,
+		config: cfg,
+		stats:  make(map[string]*QueueStats),
 		folderStats: &FolderStats{
 			LastCheck: time.Now(),
 		},
-		startTime: time.Now(),
+		startTime:   time.Now(),
+		knownQueues: []string{},
 	}
 
-	// Initialize stats
-	queues := []string{
-		cfg.CloneQueueName,
-		cfg.ProcessedQueueName,
-		cfg.SecretsQueueName,
-		cfg.CleanupQueueName,
-	}
-	for _, queueName := range queues {
-		monitor.stats[queueName] = &QueueStats{
-			Name:      queueName,
-			LastCheck: time.Now(),
-		}
-	}
+	// Discover initial queues
+	monitor.discoverQueues(ctx)
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -131,6 +120,7 @@ func main() {
 			fmt.Println("\n\nShutting down monitor...")
 			return
 		case <-ticker.C:
+			monitor.discoverQueues(ctx)
 			monitor.updateStats(ctx)
 			monitor.updateFolderStats()
 			monitor.displayDashboard(ctx)
@@ -140,15 +130,12 @@ func main() {
 
 func loadConfig() *MonitorConfig {
 	cfg := &MonitorConfig{
-		RedisHost:          getEnv("REDIS_HOST", "localhost"),
-		RedisPort:          getEnv("REDIS_PORT", "6379"),
-		RedisPassword:      os.Getenv("REDIS_PASSWORD"),
-		RefreshRate:        5 * time.Second,
-		CloneQueueName:     getEnv("CLONE_QUEUE_NAME", "clone_queue"),
-		ProcessedQueueName: getEnv("PROCESSED_QUEUE_NAME", "processed_queue"),
-		SecretsQueueName:   getEnv("SECRETS_QUEUE_NAME", "secrets_queue"),
-		CleanupQueueName:   getEnv("CLEANUP_QUEUE_NAME", "cleanup_queue"),
-		SharedVolumeDir:    getEnv("SHARED_VOLUME_DIR", "./shared-repos"),
+		RedisHost:       getEnv("REDIS_HOST", "localhost"),
+		RedisPort:       getEnv("REDIS_PORT", "6379"),
+		RedisPassword:   os.Getenv("REDIS_PASSWORD"),
+		RefreshRate:     1 * time.Second,
+		QueuePattern:    getEnv("QUEUE_PATTERN", "*_queue"),
+		SharedVolumeDir: getEnv("SHARED_VOLUME_DIR", "./shared-repos"),
 	}
 
 	// Parse Redis DB
@@ -177,6 +164,54 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func (m *Monitor) discoverQueues(ctx context.Context) {
+	m.statsMutex.Lock()
+	defer m.statsMutex.Unlock()
+
+	// Get all keys matching the pattern
+	keys, err := m.client.Keys(ctx, m.config.QueuePattern).Result()
+	if err != nil {
+		log.Printf("Error discovering queues: %v", err)
+		return
+	}
+
+	// Filter to only include lists (queues)
+	newQueues := []string{}
+	for _, key := range keys {
+		keyType, err := m.client.Type(ctx, key).Result()
+		if err != nil {
+			continue
+		}
+		if keyType == "list" {
+			newQueues = append(newQueues, key)
+
+			// Initialize stats for new queues
+			if _, exists := m.stats[key]; !exists {
+				m.stats[key] = &QueueStats{
+					Name:      key,
+					LastCheck: time.Now(),
+				}
+			}
+		}
+	}
+
+	// Remove stats for queues that no longer exist
+	existingKeys := make(map[string]bool)
+	for _, key := range newQueues {
+		existingKeys[key] = true
+	}
+
+	for key := range m.stats {
+		if !existingKeys[key] {
+			delete(m.stats, key)
+		}
+	}
+
+	// Sort queues for consistent display
+	sort.Strings(newQueues)
+	m.knownQueues = newQueues
 }
 
 func (m *Monitor) updateStats(ctx context.Context) {
@@ -224,25 +259,30 @@ func (m *Monitor) formatQueueItem(queueName string, item string) string {
 	// Try to parse as JSON and extract key info
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(item), &data); err == nil {
-		switch queueName {
-		case m.config.CloneQueueName:
-			if org, ok := data["org"].(string); ok {
-				if name, ok := data["name"].(string); ok {
-					return fmt.Sprintf("%s/%s", org, name)
-				}
+		// Try to extract org/name pattern (common across all queues)
+		if org, ok := data["org"].(string); ok {
+			if name, ok := data["name"].(string); ok {
+				return fmt.Sprintf("%s/%s", org, name)
 			}
-		case m.config.ProcessedQueueName, m.config.CleanupQueueName:
-			if org, ok := data["org"].(string); ok {
-				if name, ok := data["name"].(string); ok {
-					return fmt.Sprintf("%s/%s", org, name)
-				}
+		}
+
+		// Try other common patterns
+		if repo, ok := data["repository"].(string); ok {
+			return repo
+		}
+		if url, ok := data["url"].(string); ok {
+			// Extract repo name from URL if possible
+			parts := strings.Split(url, "/")
+			if len(parts) >= 2 {
+				return fmt.Sprintf("%s/%s", parts[len(parts)-2], parts[len(parts)-1])
 			}
-		case m.config.SecretsQueueName:
-			// For secrets queue, just show repo info
-			if org, ok := data["org"].(string); ok {
-				if name, ok := data["name"].(string); ok {
-					return fmt.Sprintf("%s/%s", org, name)
-				}
+			return url
+		}
+
+		// For unknown structure, show first string field found
+		for key, value := range data {
+			if str, ok := value.(string); ok && str != "" {
+				return fmt.Sprintf("%s: %s", key, str)
 			}
 		}
 	}
@@ -269,16 +309,8 @@ func (m *Monitor) displayDashboard(ctx context.Context) {
 	fmt.Printf("  Last updated: %s | Refresh: %v\n", time.Now().Format("15:04:05"), m.config.RefreshRate)
 	fmt.Println()
 
-	// Pipeline flow diagram
-	fmt.Println("  Pipeline Flow:")
-	fmt.Println("  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐")
-	fmt.Println("  │  Collector  │ ──▶│   Cloner    │ ──▶│   Scanner   │ ──▶│   Cleaner   │")
-	fmt.Println("  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘")
-	fmt.Printf("       %-15s      %-15s      %-15s      %-15s\n",
-		m.formatQueueStatus(m.config.CloneQueueName),
-		m.formatQueueStatus(m.config.ProcessedQueueName),
-		m.formatQueueStatus(m.config.SecretsQueueName),
-		m.formatQueueStatus(m.config.CleanupQueueName))
+	// Show discovered queues
+	fmt.Printf("  Discovered Queues: %d queues matching pattern '%s'\n", len(m.knownQueues), m.config.QueuePattern)
 	fmt.Println()
 
 	// Queue details
@@ -291,14 +323,7 @@ func (m *Monitor) displayDashboard(ctx context.Context) {
 	activeQueues := 0
 
 	// Display each queue
-	queues := []string{
-		m.config.CloneQueueName,
-		m.config.ProcessedQueueName,
-		m.config.SecretsQueueName,
-		m.config.CleanupQueueName,
-	}
-
-	for _, queueName := range queues {
+	for _, queueName := range m.knownQueues {
 		stat := m.stats[queueName]
 		totalItems += stat.Length
 		if stat.Length > 0 {
@@ -335,74 +360,35 @@ func (m *Monitor) displayDashboard(ctx context.Context) {
 	fmt.Println("  ┌────────────────────┬──────────────┬────────────┬────────────────────────┐")
 	fmt.Println("  │ Metric             │ Value        │ Growth     │ Details                │")
 	fmt.Println("  ├────────────────────┼──────────────┼────────────┼────────────────────────┤")
-	
+
 	// Format growth rate
 	growthStr := "0.0 MB/m"
 	if m.folderStats.GrowthRate != 0 {
 		growthStr = fmt.Sprintf("%+.1f MB/m", m.folderStats.GrowthRate)
 	}
-	
+
 	// Format details
 	details := fmt.Sprintf("%d repositories", m.folderStats.RepoCount)
 	if len(details) > 20 {
 		details = details[:17] + "..."
 	}
-	
+
 	fmt.Printf("  │ %-18s │ %12s │ %10s │ %-22s │\n",
 		"Disk Usage",
 		formatBytes(m.folderStats.TotalSize),
 		growthStr,
 		details)
-	
+
 	fmt.Println("  └────────────────────┴──────────────┴────────────┴────────────────────────┘")
 	fmt.Println()
 
 	// Summary
-	fmt.Printf("  Summary: %d active queues | %d total items | ", activeQueues, totalItems)
-
-	// Service status indicators
-	fmt.Print("Services: ")
-	fmt.Printf("Collector %s | ", m.getServiceStatus(m.config.CloneQueueName, true))
-	fmt.Printf("Cloner %s | ", m.getServiceStatus(m.config.ProcessedQueueName, false))
-	fmt.Printf("Scanner %s | ", m.getServiceStatus(m.config.SecretsQueueName, false))
-	fmt.Printf("Cleaner %s", m.getServiceStatus(m.config.CleanupQueueName, false))
-	fmt.Println()
+	fmt.Printf("  Summary: %d discovered queues | %d active queues | %d total items\n", len(m.knownQueues), activeQueues, totalItems)
 
 	// Display Redis info
 	m.displayRedisInfo(ctx)
 
 	fmt.Println("\n  Press Ctrl+C to exit")
-}
-
-func (m *Monitor) formatQueueStatus(queueName string) string {
-	stat := m.stats[queueName]
-	if stat.Length == 0 {
-		return "[empty]"
-	}
-	return fmt.Sprintf("[%d items]", stat.Length)
-}
-
-func (m *Monitor) getServiceStatus(queueName string, isProducer bool) string {
-	stat := m.stats[queueName]
-
-	// For producers, check if the queue has items (they're producing)
-	// For consumers, check if the queue is being consumed (negative rate)
-	if isProducer {
-		if stat.Length > 0 || stat.Rate > 0 {
-			return "✓"
-		}
-	} else {
-		if stat.Rate < 0 {
-			return "✓"
-		}
-	}
-
-	// Check if there's any activity
-	if stat.Length > 0 {
-		return "⚡" // Has items but no processing
-	}
-
-	return "○" // Idle
 }
 
 func (m *Monitor) formatDuration(d time.Duration) string {
@@ -510,7 +496,6 @@ func (m *Monitor) updateFolderStats() {
 
 		return nil
 	})
-
 	if err != nil {
 		log.Printf("[DiskMonitor] Error walking directory %s: %v", m.config.SharedVolumeDir, err)
 		return

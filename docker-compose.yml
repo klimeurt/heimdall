@@ -113,6 +113,7 @@ services:
       - PROCESSED_QUEUE_NAME=processed_queue
       - SECRETS_QUEUE_NAME=secrets_queue
       - CLEANUP_QUEUE_NAME=cleanup_queue
+      - COORDINATOR_QUEUE_NAME=coordinator_queue
     depends_on:
       - redis
       - init-volume
@@ -127,7 +128,9 @@ services:
       - REDIS_PORT=6379
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - INDEX_NAME=heimdall-secrets
+      - VULNERABILITIES_INDEX_NAME=heimdall-vulnerabilities
       - SECRETS_QUEUE_NAME=secrets_queue
+      - OSV_RESULTS_QUEUE_NAME=osv_results_queue
       - MAX_CONCURRENT_WORKERS=2
       - BULK_SIZE=50
       - BULK_FLUSH_INTERVAL=10s
@@ -136,6 +139,41 @@ services:
         condition: service_started
       elasticsearch:
         condition: service_healthy
+    restart: unless-stopped
+
+  osv-scanner:
+    build:
+      context: .
+      dockerfile: deployments/osv-scanner/Dockerfile
+    volumes:
+      - ./shared-repos:/shared/heimdall-repos
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MAX_CONCURRENT_SCANS=2
+      - SCAN_TIMEOUT_MINUTES=30
+      - SHARED_VOLUME_DIR=/shared/heimdall-repos
+      - OSV_QUEUE_NAME=osv_queue
+      - OSV_RESULTS_QUEUE_NAME=osv_results_queue
+      - COORDINATOR_QUEUE_NAME=coordinator_queue
+    depends_on:
+      - redis
+      - init-volume
+    restart: unless-stopped
+
+  coordinator:
+    build:
+      context: .
+      dockerfile: deployments/coordinator/Dockerfile
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - COORDINATOR_QUEUE_NAME=coordinator_queue
+      - CLEANUP_QUEUE_NAME=cleanup_queue
+      - JOB_TIMEOUT_MINUTES=60
+      - STATE_CLEANUP_INTERVAL=5m
+    depends_on:
+      - redis
     restart: unless-stopped
 
   cleaner:

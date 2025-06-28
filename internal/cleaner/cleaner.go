@@ -109,7 +109,7 @@ func (c *Cleaner) worker(ctx context.Context, workerID int) {
 
 			// Process the cleanup job
 			if err := c.processCleanupJob(ctx, workerID, &cleanupJob); err != nil {
-				log.Printf("Cleaner Worker %d: Failed to process cleanup job for %s/%s: %v", 
+				log.Printf("Cleaner Worker %d: Failed to process cleanup job for %s/%s: %v",
 					workerID, cleanupJob.Org, cleanupJob.Name, err)
 			}
 
@@ -126,18 +126,18 @@ func (c *Cleaner) worker(ctx context.Context, workerID int) {
 
 // processCleanupJob deletes the repository directory
 func (c *Cleaner) processCleanupJob(ctx context.Context, workerID int, job *collector.CleanupJob) error {
-	log.Printf("Cleaner Worker %d: Processing cleanup job for %s/%s at path %s", 
+	log.Printf("Cleaner Worker %d: Processing cleanup job for %s/%s at path %s",
 		workerID, job.Org, job.Name, job.ClonePath)
 
 	// Validate that the path is within the shared volume
 	if !c.isPathSafe(job.ClonePath) {
-		return fmt.Errorf("unsafe path: %s is not within shared volume %s", 
+		return fmt.Errorf("unsafe path: %s is not within shared volume %s",
 			job.ClonePath, c.config.SharedVolumeDir)
 	}
 
 	// Check if directory exists
 	if _, err := os.Stat(job.ClonePath); os.IsNotExist(err) {
-		log.Printf("Cleaner Worker %d: Directory %s does not exist, skipping cleanup", 
+		log.Printf("Cleaner Worker %d: Directory %s does not exist, skipping cleanup",
 			workerID, job.ClonePath)
 		return nil
 	}
@@ -147,7 +147,7 @@ func (c *Cleaner) processCleanupJob(ctx context.Context, workerID int, job *coll
 		return fmt.Errorf("failed to remove directory %s: %w", job.ClonePath, err)
 	}
 
-	log.Printf("Cleaner Worker %d: Successfully cleaned up %s/%s at path %s", 
+	log.Printf("Cleaner Worker %d: Successfully cleaned up %s/%s at path %s",
 		workerID, job.Org, job.Name, job.ClonePath)
 
 	return nil

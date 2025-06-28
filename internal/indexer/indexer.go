@@ -51,6 +51,38 @@ type ElasticsearchDocument struct {
 	WorkerID     int       `json:"worker_id"`
 }
 
+// VulnerabilityDetail represents individual vulnerability information
+type VulnerabilityDetail struct {
+	ID          string   `json:"id"`
+	Package     string   `json:"package"`
+	Version     string   `json:"version"`
+	Ecosystem   string   `json:"ecosystem"`
+	Severity    string   `json:"severity"`
+	Summary     string   `json:"summary"`
+	CVE         string   `json:"cve,omitempty"`
+	CWE         []string `json:"cwe,omitempty"`
+	PackageFile string   `json:"package_file"`
+}
+
+// ElasticsearchVulnerabilityDocument represents the structure of vulnerability documents indexed in Elasticsearch
+type ElasticsearchVulnerabilityDocument struct {
+	Organization       string                `json:"organization"`
+	Repository         string                `json:"repository"`
+	VulnerabilityCount int                   `json:"vulnerability_count"`
+	CriticalCount      int                   `json:"critical_count"`
+	HighCount          int                   `json:"high_count"`
+	MediumCount        int                   `json:"medium_count"`
+	LowCount           int                   `json:"low_count"`
+	UnknownCount       int                   `json:"unknown_count"`
+	ScannedAt          time.Time             `json:"scanned_at"`
+	ProcessedAt        time.Time             `json:"processed_at"`
+	ScanStatus         string                `json:"scan_status"`
+	ScanDuration       time.Duration         `json:"scan_duration"`
+	WorkerID           int                   `json:"worker_id"`
+	ErrorMessage       string                `json:"error_message,omitempty"`
+	Vulnerabilities    []VulnerabilityDetail `json:"vulnerabilities"`
+}
+
 // New creates a new Indexer instance
 func New(cfg *config.IndexerConfig) (*Indexer, error) {
 	// Create Redis client
@@ -70,14 +102,14 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 	esConfig := elasticsearch.Config{
 		Addresses: []string{cfg.ElasticsearchURL},
 	}
-	
+
 	var esClient *elasticsearch.Client
 	var err error
-	
+
 	// Retry connection to Elasticsearch
 	maxRetries := 10
 	retryDelay := 5 * time.Second
-	
+
 	for i := 0; i < maxRetries; i++ {
 		esClient, err = elasticsearch.NewClient(esConfig)
 		if err != nil {
@@ -88,7 +120,7 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 			}
 			return nil, fmt.Errorf("failed to create Elasticsearch client after %d attempts: %w", maxRetries, err)
 		}
-		
+
 		// Test Elasticsearch connection
 		res, err := esClient.Info()
 		if err != nil {
@@ -100,7 +132,7 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 			return nil, fmt.Errorf("failed to connect to Elasticsearch after %d attempts: %w", maxRetries, err)
 		}
 		defer res.Body.Close()
-		
+
 		if res.IsError() {
 			log.Printf("Elasticsearch returned error (attempt %d/%d): %s", i+1, maxRetries, res.String())
 			if i < maxRetries-1 {
@@ -109,7 +141,7 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 			}
 			return nil, fmt.Errorf("Elasticsearch returned error after %d attempts: %s", maxRetries, res.String())
 		}
-		
+
 		// Connection successful
 		log.Printf("Connected to Elasticsearch successfully on attempt %d", i+1)
 		break
@@ -122,9 +154,13 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 		bulkBuffer:  make([]BulkDocument, 0, cfg.BulkSize),
 	}
 
-	// Create index if it doesn't exist
+	// Create indices if they don't exist
 	if err := indexer.createIndexIfNotExists(ctx); err != nil {
-		return nil, fmt.Errorf("failed to create index: %w", err)
+		return nil, fmt.Errorf("failed to create secrets index: %w", err)
+	}
+
+	if err := indexer.createVulnerabilityIndexIfNotExists(ctx); err != nil {
+		return nil, fmt.Errorf("failed to create vulnerabilities index: %w", err)
 	}
 
 	return indexer, nil
@@ -132,27 +168,43 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 
 // Start begins the indexer workers
 func (i *Indexer) Start(ctx context.Context) error {
-	// Log queue length at startup
-	queueLen, err := i.redisClient.LLen(ctx, i.config.SecretsQueueName).Result()
+	// Log queue lengths at startup
+	secretsQueueLen, err := i.redisClient.LLen(ctx, i.config.SecretsQueueName).Result()
 	if err != nil {
-		log.Printf("Failed to get queue length at startup: %v", err)
+		log.Printf("Failed to get secrets queue length at startup: %v", err)
 	} else {
-		log.Printf("Queue length at startup: %d items", queueLen)
+		log.Printf("Secrets queue length at startup: %d items", secretsQueueLen)
 	}
 
-	log.Printf("Starting %d indexer workers", i.config.MaxConcurrentWorkers)
+	osvQueueLen, err := i.redisClient.LLen(ctx, i.config.OSVResultsQueueName).Result()
+	if err != nil {
+		log.Printf("Failed to get OSV results queue length at startup: %v", err)
+	} else {
+		log.Printf("OSV results queue length at startup: %d items", osvQueueLen)
+	}
+
+	log.Printf("Starting %d secrets indexer workers and %d OSV indexer workers", i.config.MaxConcurrentWorkers, i.config.MaxConcurrentWorkers)
 
 	// Start the flush timer
 	i.startFlushTimer(ctx)
 
 	var wg sync.WaitGroup
 
-	// Start worker goroutines
+	// Start secrets worker goroutines
 	for w := 0; w < i.config.MaxConcurrentWorkers; w++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
 			i.worker(ctx, workerID)
+		}(w)
+	}
+
+	// Start OSV worker goroutines
+	for w := 0; w < i.config.MaxConcurrentWorkers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			i.osvWorker(ctx, workerID)
 		}(w)
 	}
 
@@ -219,6 +271,58 @@ func (i *Indexer) worker(ctx context.Context, workerID int) {
 	}
 }
 
+// osvWorker processes OSV scanner results from the Redis queue
+func (i *Indexer) osvWorker(ctx context.Context, workerID int) {
+	log.Printf("OSV Indexer Worker %d started", workerID)
+	defer log.Printf("OSV Indexer Worker %d stopped", workerID)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			// Block until a job is available or context is cancelled
+			result, err := i.redisClient.BRPop(ctx, 0, i.config.OSVResultsQueueName).Result()
+			if err != nil {
+				if err == redis.Nil {
+					continue // No items in queue, keep waiting
+				}
+				if ctx.Err() != nil {
+					return // Context cancelled
+				}
+				log.Printf("OSV Indexer Worker %d: Redis error: %v", workerID, err)
+				continue
+			}
+
+			// result[0] is the queue name, result[1] is the data
+			if len(result) < 2 {
+				log.Printf("OSV Indexer Worker %d: Invalid Redis result", workerID)
+				continue
+			}
+
+			// Parse OSV scanned repository data
+			var osvScannedRepo collector.OSVScannedRepository
+			if err := json.Unmarshal([]byte(result[1]), &osvScannedRepo); err != nil {
+				log.Printf("OSV Indexer Worker %d: Failed to parse OSV scanned repository data: %v", workerID, err)
+				continue
+			}
+
+			// Index the OSV scan results
+			if err := i.indexOSVRepository(ctx, workerID, &osvScannedRepo); err != nil {
+				log.Printf("OSV Indexer Worker %d: Failed to index OSV repository %s/%s: %v", workerID, osvScannedRepo.Org, osvScannedRepo.Name, err)
+			}
+
+			// Log queue length after job execution
+			queueLen, err := i.redisClient.LLen(ctx, i.config.OSVResultsQueueName).Result()
+			if err != nil {
+				log.Printf("OSV Indexer Worker %d: Failed to get queue length after job: %v", workerID, err)
+			} else {
+				log.Printf("OSV Indexer Worker %d: Queue length after job: %d items", workerID, queueLen)
+			}
+		}
+	}
+}
+
 // indexRepository indexes the scan results for a repository
 func (i *Indexer) indexRepository(ctx context.Context, workerID int, scannedRepo *collector.ScannedRepository) error {
 	startTime := time.Now()
@@ -268,18 +372,90 @@ func (i *Indexer) indexRepository(ctx context.Context, workerID int, scannedRepo
 	return nil
 }
 
+// indexOSVRepository indexes the OSV scan results for a repository
+func (i *Indexer) indexOSVRepository(ctx context.Context, workerID int, osvScannedRepo *collector.OSVScannedRepository) error {
+	startTime := time.Now()
+	log.Printf("OSV Indexer Worker %d: Indexing repository %s/%s with %d vulnerabilities", workerID, osvScannedRepo.Org, osvScannedRepo.Name, osvScannedRepo.VulnerabilitiesFound)
+
+	// Count vulnerabilities by severity
+	criticalCount := 0
+	highCount := 0
+	mediumCount := 0
+	lowCount := 0
+	unknownCount := 0
+
+	// Convert OSV vulnerabilities to our indexing format and count severities
+	vulnerabilities := make([]VulnerabilityDetail, 0, len(osvScannedRepo.Vulnerabilities))
+	for _, vuln := range osvScannedRepo.Vulnerabilities {
+		detail := VulnerabilityDetail{
+			ID:          vuln.ID,
+			Package:     vuln.Package,
+			Version:     vuln.Version,
+			Ecosystem:   vuln.Ecosystem,
+			Severity:    vuln.Severity,
+			Summary:     vuln.Summary,
+			CVE:         vuln.CVE,
+			CWE:         vuln.CWE,
+			PackageFile: vuln.PackageFile,
+		}
+		vulnerabilities = append(vulnerabilities, detail)
+
+		// Count by severity
+		switch strings.ToUpper(vuln.Severity) {
+		case "CRITICAL":
+			criticalCount++
+		case "HIGH":
+			highCount++
+		case "MEDIUM":
+			mediumCount++
+		case "LOW":
+			lowCount++
+		default:
+			unknownCount++
+		}
+	}
+
+	// Create the aggregated document for per-repository reporting
+	doc := ElasticsearchVulnerabilityDocument{
+		Organization:       osvScannedRepo.Org,
+		Repository:         osvScannedRepo.Name,
+		VulnerabilityCount: osvScannedRepo.VulnerabilitiesFound,
+		CriticalCount:      criticalCount,
+		HighCount:          highCount,
+		MediumCount:        mediumCount,
+		LowCount:           lowCount,
+		UnknownCount:       unknownCount,
+		ScannedAt:          osvScannedRepo.ScannedAt,
+		ProcessedAt:        osvScannedRepo.ProcessedAt,
+		ScanStatus:         osvScannedRepo.ScanStatus,
+		ScanDuration:       osvScannedRepo.ScanDuration,
+		WorkerID:           osvScannedRepo.WorkerID,
+		ErrorMessage:       osvScannedRepo.ErrorMessage,
+		Vulnerabilities:    vulnerabilities,
+	}
+
+	// Generate unique document ID (one doc per repo)
+	docID := fmt.Sprintf("%s_%s_osv_%d", osvScannedRepo.Org, osvScannedRepo.Name, osvScannedRepo.ScannedAt.Unix())
+	i.addToBulkBuffer(ctx, i.config.VulnerabilitiesIndexName, docID, doc)
+
+	log.Printf("OSV Indexer Worker %d: Repository %s/%s indexed successfully with %d vulnerabilities (Critical:%d, High:%d, Medium:%d, Low:%d) in %v",
+		workerID, osvScannedRepo.Org, osvScannedRepo.Name, osvScannedRepo.VulnerabilitiesFound,
+		criticalCount, highCount, mediumCount, lowCount, time.Since(startTime))
+	return nil
+}
+
 // addToBulkBuffer adds a document to the bulk buffer
 func (i *Indexer) addToBulkBuffer(ctx context.Context, index, id string, doc interface{}) {
 	i.bufferMutex.Lock()
-	
+
 	i.bulkBuffer = append(i.bulkBuffer, BulkDocument{
 		Index:    index,
 		ID:       id,
 		Document: doc,
 	})
-	
+
 	log.Printf("Added document to buffer. Buffer size: %d/%d", len(i.bulkBuffer), i.config.BulkSize)
-	
+
 	shouldFlush := len(i.bulkBuffer) >= i.config.BulkSize
 	i.bufferMutex.Unlock()
 
@@ -431,6 +607,75 @@ func (i *Indexer) createIndexIfNotExists(ctx context.Context) error {
 	}
 
 	log.Printf("Created index %s successfully", i.config.IndexName)
+	return nil
+}
+
+// createVulnerabilityIndexIfNotExists creates the Elasticsearch vulnerability index with proper mappings
+func (i *Indexer) createVulnerabilityIndexIfNotExists(ctx context.Context) error {
+	// Check if index exists
+	exists, err := i.esClient.Indices.Exists([]string{i.config.VulnerabilitiesIndexName})
+	if err != nil {
+		return fmt.Errorf("failed to check if vulnerability index exists: %w", err)
+	}
+	defer exists.Body.Close()
+
+	if exists.StatusCode == 200 {
+		log.Printf("Vulnerability index %s already exists", i.config.VulnerabilitiesIndexName)
+		return nil
+	}
+
+	// Create index with mappings optimized for vulnerability reporting
+	mapping := `{
+		"mappings": {
+			"properties": {
+				"organization": { "type": "keyword" },
+				"repository": { "type": "keyword" },
+				"vulnerability_count": { "type": "integer" },
+				"critical_count": { "type": "integer" },
+				"high_count": { "type": "integer" },
+				"medium_count": { "type": "integer" },
+				"low_count": { "type": "integer" },
+				"unknown_count": { "type": "integer" },
+				"scanned_at": { "type": "date" },
+				"processed_at": { "type": "date" },
+				"scan_status": { "type": "keyword" },
+				"scan_duration": { "type": "long" },
+				"worker_id": { "type": "integer" },
+				"error_message": { "type": "text" },
+				"vulnerabilities": {
+					"type": "nested",
+					"properties": {
+						"id": { "type": "keyword" },
+						"package": { "type": "keyword" },
+						"version": { "type": "keyword" },
+						"ecosystem": { "type": "keyword" },
+						"severity": { "type": "keyword" },
+						"summary": { "type": "text" },
+						"cve": { "type": "keyword" },
+						"cwe": { "type": "keyword" },
+						"package_file": { "type": "keyword" }
+					}
+				}
+			}
+		}
+	}`
+
+	req := esapi.IndicesCreateRequest{
+		Index: i.config.VulnerabilitiesIndexName,
+		Body:  strings.NewReader(mapping),
+	}
+
+	res, err := req.Do(ctx, i.esClient)
+	if err != nil {
+		return fmt.Errorf("failed to create vulnerability index: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return fmt.Errorf("failed to create vulnerability index: %s", res.String())
+	}
+
+	log.Printf("Created vulnerability index %s successfully", i.config.VulnerabilitiesIndexName)
 	return nil
 }
 

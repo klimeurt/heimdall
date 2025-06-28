@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make
@@ -18,7 +18,7 @@ COPY . .
 RUN go build -ldflags="-w -s" -o osv-scanner ./cmd/osv-scanner
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.20
 
 # Install runtime dependencies
 RUN apk add --no-cache \

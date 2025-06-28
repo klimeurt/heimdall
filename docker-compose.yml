@@ -150,7 +150,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - MAX_CONCURRENT_SCANS=3
+      - MAX_CONCURRENT_SCANS=2
       - SCAN_TIMEOUT_MINUTES=30
       - SHARED_VOLUME_DIR=/shared/heimdall-repos
       - OSV_QUEUE_NAME=osv_queue

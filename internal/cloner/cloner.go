@@ -154,8 +154,8 @@ func (c *Cloner) processRepository(ctx context.Context, workerID int, repo *coll
 	// Clone options - explicitly set SingleBranch to false to fetch all branches
 	cloneOptions := &git.CloneOptions{
 		URL:          repoURL,
-		SingleBranch: false,  // Fetch all branches
-		Tags:         git.AllTags,  // Fetch all tags as well
+		SingleBranch: false,       // Fetch all branches
+		Tags:         git.AllTags, // Fetch all tags as well
 	}
 
 	// Add authentication if available
@@ -201,12 +201,17 @@ func (c *Cloner) processRepository(ctx context.Context, workerID int, repo *coll
 		return fmt.Errorf("failed to marshal processed repository data: %w", err)
 	}
 
-	// Push to processed queue
+	// Push to processed queue (for TruffleHog scanner)
 	if err := c.redisClient.LPush(ctx, c.config.ProcessedQueueName, processedData).Err(); err != nil {
-		return fmt.Errorf("failed to push processed repository to queue: %w", err)
+		return fmt.Errorf("failed to push processed repository to processed queue: %w", err)
 	}
 
-	log.Printf("Worker %d: Repository %s/%s cloned and processed successfully", workerID, repo.Org, repo.Name)
+	// Push to OSV queue (for OSV scanner)
+	if err := c.redisClient.LPush(ctx, c.config.OSVQueueName, processedData).Err(); err != nil {
+		return fmt.Errorf("failed to push processed repository to OSV queue: %w", err)
+	}
+
+	log.Printf("Worker %d: Repository %s/%s cloned and sent to both scanner queues", workerID, repo.Org, repo.Name)
 
 	return nil
 }

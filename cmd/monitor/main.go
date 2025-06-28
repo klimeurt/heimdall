@@ -20,35 +20,35 @@ import (
 
 // MonitorConfig holds the monitor configuration
 type MonitorConfig struct {
-	RedisHost           string
-	RedisPort           string
-	RedisPassword       string
-	RedisDB             int
-	RefreshRate         time.Duration
-	CloneQueueName      string
-	ProcessedQueueName  string
-	SecretsQueueName    string
-	CleanupQueueName    string
-	SharedVolumeDir     string
+	RedisHost          string
+	RedisPort          string
+	RedisPassword      string
+	RedisDB            int
+	RefreshRate        time.Duration
+	CloneQueueName     string
+	ProcessedQueueName string
+	SecretsQueueName   string
+	CleanupQueueName   string
+	SharedVolumeDir    string
 }
 
 // QueueStats holds statistics for a Redis queue
 type QueueStats struct {
-	Name         string
-	Length       int64
-	Rate         float64 // items per minute
-	LastLength   int64
-	LastCheck    time.Time
-	RecentItems  []string
+	Name        string
+	Length      int64
+	Rate        float64 // items per minute
+	LastLength  int64
+	LastCheck   time.Time
+	RecentItems []string
 }
 
 // FolderStats holds statistics for the shared volume folder
 type FolderStats struct {
-	TotalSize     int64
-	RepoCount     int
-	LastSize      int64
-	LastCheck     time.Time
-	GrowthRate    float64 // MB per minute
+	TotalSize  int64
+	RepoCount  int
+	LastSize   int64
+	LastCheck  time.Time
+	GrowthRate float64 // MB per minute
 }
 
 // Monitor holds the monitor state
@@ -89,9 +89,9 @@ func main() {
 
 	// Create monitor
 	monitor := &Monitor{
-		client:    redisClient,
-		config:    cfg,
-		stats:     make(map[string]*QueueStats),
+		client: redisClient,
+		config: cfg,
+		stats:  make(map[string]*QueueStats),
 		folderStats: &FolderStats{
 			LastCheck: time.Now(),
 		},
@@ -335,25 +335,25 @@ func (m *Monitor) displayDashboard(ctx context.Context) {
 	fmt.Println("  ┌────────────────────┬──────────────┬────────────┬────────────────────────┐")
 	fmt.Println("  │ Metric             │ Value        │ Growth     │ Details                │")
 	fmt.Println("  ├────────────────────┼──────────────┼────────────┼────────────────────────┤")
-	
+
 	// Format growth rate
 	growthStr := "0.0 MB/m"
 	if m.folderStats.GrowthRate != 0 {
 		growthStr = fmt.Sprintf("%+.1f MB/m", m.folderStats.GrowthRate)
 	}
-	
+
 	// Format details
 	details := fmt.Sprintf("%d repositories", m.folderStats.RepoCount)
 	if len(details) > 20 {
 		details = details[:17] + "..."
 	}
-	
+
 	fmt.Printf("  │ %-18s │ %12s │ %10s │ %-22s │\n",
 		"Disk Usage",
 		formatBytes(m.folderStats.TotalSize),
 		growthStr,
 		details)
-	
+
 	fmt.Println("  └────────────────────┴──────────────┴────────────┴────────────────────────┘")
 	fmt.Println()
 

@@ -70,14 +70,14 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 	esConfig := elasticsearch.Config{
 		Addresses: []string{cfg.ElasticsearchURL},
 	}
-	
+
 	var esClient *elasticsearch.Client
 	var err error
-	
+
 	// Retry connection to Elasticsearch
 	maxRetries := 10
 	retryDelay := 5 * time.Second
-	
+
 	for i := 0; i < maxRetries; i++ {
 		esClient, err = elasticsearch.NewClient(esConfig)
 		if err != nil {
@@ -88,7 +88,7 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 			}
 			return nil, fmt.Errorf("failed to create Elasticsearch client after %d attempts: %w", maxRetries, err)
 		}
-		
+
 		// Test Elasticsearch connection
 		res, err := esClient.Info()
 		if err != nil {
@@ -100,7 +100,7 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 			return nil, fmt.Errorf("failed to connect to Elasticsearch after %d attempts: %w", maxRetries, err)
 		}
 		defer res.Body.Close()
-		
+
 		if res.IsError() {
 			log.Printf("Elasticsearch returned error (attempt %d/%d): %s", i+1, maxRetries, res.String())
 			if i < maxRetries-1 {
@@ -109,7 +109,7 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 			}
 			return nil, fmt.Errorf("Elasticsearch returned error after %d attempts: %s", maxRetries, res.String())
 		}
-		
+
 		// Connection successful
 		log.Printf("Connected to Elasticsearch successfully on attempt %d", i+1)
 		break
@@ -271,15 +271,15 @@ func (i *Indexer) indexRepository(ctx context.Context, workerID int, scannedRepo
 // addToBulkBuffer adds a document to the bulk buffer
 func (i *Indexer) addToBulkBuffer(ctx context.Context, index, id string, doc interface{}) {
 	i.bufferMutex.Lock()
-	
+
 	i.bulkBuffer = append(i.bulkBuffer, BulkDocument{
 		Index:    index,
 		ID:       id,
 		Document: doc,
 	})
-	
+
 	log.Printf("Added document to buffer. Buffer size: %d/%d", len(i.bulkBuffer), i.config.BulkSize)
-	
+
 	shouldFlush := len(i.bulkBuffer) >= i.config.BulkSize
 	i.bufferMutex.Unlock()
 

@@ -163,8 +163,8 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 	// Validate that the path exists
 	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
 		err := fmt.Errorf("clone path does not exist: %s", repoDir)
-		// Still send to cleanup queue even if path is missing
-		s.sendCleanupJob(ctx, workerID, processedRepo)
+		// Still send coordination message even if path is missing
+		s.sendCoordinationMessage(ctx, workerID, processedRepo, "failed", startTime)
 		return s.handleScanError(ctx, workerID, processedRepo, startTime, err)
 	}
 
@@ -205,9 +205,9 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 		return fmt.Errorf("failed to push scanned repository to queue: %w", err)
 	}
 
-	// Send cleanup job
-	if err := s.sendCleanupJob(ctx, workerID, processedRepo); err != nil {
-		log.Printf("Scanner Worker %d: Failed to send cleanup job for %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, err)
+	// Send coordination message
+	if err := s.sendCoordinationMessage(ctx, workerID, processedRepo, scannedRepo.ScanStatus, startTime); err != nil {
+		log.Printf("Scanner Worker %d: Failed to send coordination message for %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, err)
 	}
 
 	log.Printf("Scanner Worker %d: Repository %s/%s scanned successfully - found %d valid secrets in %v",
@@ -367,9 +367,9 @@ func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRe
 		return fmt.Errorf("failed to push failed scan to queue: %w", pushErr)
 	}
 
-	// Send cleanup job even for failed scans
-	if cleanupErr := s.sendCleanupJob(ctx, workerID, processedRepo); cleanupErr != nil {
-		log.Printf("Scanner Worker %d: Failed to send cleanup job for failed scan %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, cleanupErr)
+	// Send coordination message even for failed scans
+	if coordErr := s.sendCoordinationMessage(ctx, workerID, processedRepo, status, startTime); coordErr != nil {
+		log.Printf("Scanner Worker %d: Failed to send coordination message for failed scan %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, coordErr)
 	}
 
 	return err // Return original error
@@ -403,25 +403,28 @@ func getBoolField(data map[string]interface{}, field string) bool {
 	return false
 }
 
-// sendCleanupJob sends a cleanup job to the cleanup queue
-func (s *Scanner) sendCleanupJob(ctx context.Context, workerID int, processedRepo *collector.ProcessedRepository) error {
-	cleanupJob := &collector.CleanupJob{
-		ClonePath:   processedRepo.ClonePath,
-		Org:         processedRepo.Org,
-		Name:        processedRepo.Name,
-		RequestedAt: time.Now(),
-		WorkerID:    workerID,
+// sendCoordinationMessage sends a message to the coordinator when scanning is complete
+func (s *Scanner) sendCoordinationMessage(ctx context.Context, workerID int, processedRepo *collector.ProcessedRepository, status string, startTime time.Time) error {
+	coordMsg := &collector.ScanCoordinationMessage{
+		ClonePath:    processedRepo.ClonePath,
+		Org:          processedRepo.Org,
+		Name:         processedRepo.Name,
+		ScannerType:  "trufflehog",
+		CompletedAt:  time.Now(),
+		WorkerID:     workerID,
+		ScanStatus:   status,
+		ScanDuration: time.Since(startTime),
 	}
 
 	// Marshal to JSON
-	cleanupData, err := json.Marshal(cleanupJob)
+	coordData, err := json.Marshal(coordMsg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal cleanup job data: %w", err)
+		return fmt.Errorf("failed to marshal coordination message: %w", err)
 	}
 
-	// Push to cleanup queue
-	if err := s.redisClient.LPush(ctx, s.config.CleanupQueueName, cleanupData).Err(); err != nil {
-		return fmt.Errorf("failed to push cleanup job to queue: %w", err)
+	// Push to coordinator queue
+	if err := s.redisClient.LPush(ctx, s.config.CoordinatorQueueName, coordData).Err(); err != nil {
+		return fmt.Errorf("failed to push coordination message to queue: %w", err)
 	}
 
 	return nil

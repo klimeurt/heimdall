@@ -25,7 +25,7 @@ func New(cfg *config.Config) (*Collector, error) {
 	// Create GitHub client
 	ctx := context.Background()
 	var ghClient *github.Client
-	
+
 	if cfg.GitHubToken != "" {
 		// Use authenticated client if token is provided
 		ts := oauth2.StaticTokenSource(

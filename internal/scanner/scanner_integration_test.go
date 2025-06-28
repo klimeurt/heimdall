@@ -26,7 +26,7 @@ func TestScannerIntegration(t *testing.T) {
 		Addr: "localhost:6379",
 		DB:   15, // Use a different DB for testing
 	})
-	
+
 	ctx := context.Background()
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		t.Skip("Redis not available for integration tests")
@@ -38,15 +38,15 @@ func TestScannerIntegration(t *testing.T) {
 
 	// Create test configuration
 	cfg := &config.ScannerConfig{
-		RedisHost:          "localhost",
-		RedisPort:          "6379",
-		RedisDB:            15,
-		ProcessedQueueName: "test_processed_queue",
-		SecretsQueueName:   "test_secrets_queue",
-		CleanupQueueName:   "test_cleanup_queue",
-		MaxConcurrentScans: 1,
-		ScanTimeout:        30 * time.Second,
-		TruffleHogConcurrency: 1,
+		RedisHost:              "localhost",
+		RedisPort:              "6379",
+		RedisDB:                15,
+		ProcessedQueueName:     "test_processed_queue",
+		SecretsQueueName:       "test_secrets_queue",
+		CleanupQueueName:       "test_cleanup_queue",
+		MaxConcurrentScans:     1,
+		ScanTimeout:            30 * time.Second,
+		TruffleHogConcurrency:  1,
 		TruffleHogOnlyVerified: false,
 	}
 
@@ -121,7 +121,7 @@ database_password: supersecret123!
 		assert.Equal(t, "test-org", scannedRepo.Org)
 		assert.Equal(t, "test-repo", scannedRepo.Name)
 		assert.NotEmpty(t, scannedRepo.ScannedAt)
-		
+
 		// Check cleanup queue
 		cleanupLen, err := redisClient.LLen(ctx, cfg.CleanupQueueName).Result()
 		require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestScannerWorkerConcurrency(t *testing.T) {
 		Addr: "localhost:6379",
 		DB:   15,
 	})
-	
+
 	ctx := context.Background()
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		t.Skip("Redis not available for integration tests")
@@ -151,15 +151,15 @@ func TestScannerWorkerConcurrency(t *testing.T) {
 
 	// Create test configuration with multiple workers
 	cfg := &config.ScannerConfig{
-		RedisHost:          "localhost",
-		RedisPort:          "6379",
-		RedisDB:            15,
-		ProcessedQueueName: "test_processed_queue",
-		SecretsQueueName:   "test_secrets_queue",
-		CleanupQueueName:   "test_cleanup_queue",
-		MaxConcurrentScans: 3,
-		ScanTimeout:        30 * time.Second,
-		TruffleHogConcurrency: 1,
+		RedisHost:              "localhost",
+		RedisPort:              "6379",
+		RedisDB:                15,
+		ProcessedQueueName:     "test_processed_queue",
+		SecretsQueueName:       "test_secrets_queue",
+		CleanupQueueName:       "test_cleanup_queue",
+		MaxConcurrentScans:     3,
+		ScanTimeout:            30 * time.Second,
+		TruffleHogConcurrency:  1,
 		TruffleHogOnlyVerified: false,
 	}
 
@@ -176,7 +176,7 @@ func TestScannerWorkerConcurrency(t *testing.T) {
 			ProcessedAt: time.Now(),
 			ClonePath:   fmt.Sprintf("/nonexistent/path-%d", i), // Will cause scan to fail quickly
 		}
-		
+
 		processedData, err := json.Marshal(processedRepo)
 		require.NoError(t, err)
 		err = redisClient.LPush(ctx, cfg.ProcessedQueueName, processedData).Err()
@@ -214,4 +214,3 @@ func TestScannerWorkerConcurrency(t *testing.T) {
 	cancel()
 	<-done
 }
-

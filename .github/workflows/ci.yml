@@ -9,9 +9,11 @@ env:
   REGISTRY: ghcr.io
   COLLECTOR_IMAGE_NAME: klimeurt/heimdall-collector
   CLONER_IMAGE_NAME: klimeurt/heimdall-cloner
-  SCANNER_IMAGE_NAME: klimeurt/heimdall-scanner
-  CLEANER_IMAGE_NAME: klimeurt/heimdall-cleaner
+  SCANNER_TRUFFLEHOG_IMAGE_NAME: klimeurt/heimdall-scanner-trufflehog
+  SCANNER_OSV_IMAGE_NAME: klimeurt/heimdall-scanner-osv
+  COORDINATOR_IMAGE_NAME: klimeurt/heimdall-coordinator
   INDEXER_IMAGE_NAME: klimeurt/heimdall-indexer
+  CLEANER_IMAGE_NAME: klimeurt/heimdall-cleaner
 
 jobs:
   build-and-push-collector:
@@ -144,7 +146,7 @@ jobs:
         annotations: |
           org.opencontainers.image.visibility=public
 
-  build-and-push-scanner:
+  build-and-push-scanner-trufflehog:
     name: Build and Push Scanner Docker Image
     runs-on: ubuntu-latest
     permissions:
@@ -188,7 +190,7 @@ jobs:
       id: scanner-meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.SCANNER_IMAGE_NAME }}
+        images: ${{ env.REGISTRY }}/${{ env.SCANNER_TRUFFLEHOG_IMAGE_NAME }}
         tags: |
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
@@ -209,8 +211,8 @@ jobs:
         annotations: |
           org.opencontainers.image.visibility=public
 
-  build-and-push-cleaner:
-    name: Build and Push Cleaner Docker Image
+  build-and-push-scanner-osv:
+    name: Build and Push OSV Scanner Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -249,28 +251,93 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract cleaner metadata
-      id: cleaner-meta
+    - name: Extract osv-scanner metadata
+      id: osv-scanner-meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.CLEANER_IMAGE_NAME }}
+        images: ${{ env.REGISTRY }}/${{ env.SCANNER_OSV_IMAGE_NAME }}
         tags: |
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
           type=semver,pattern={{major}}
           type=raw,value=latest
 
-    - name: Build and push Cleaner Docker image
+    - name: Build and push OSV Scanner Docker image
       uses: docker/build-push-action@v6
       with:
         context: .
-        file: deployments/cleaner/Dockerfile
+        file: deployments/osv-scanner/Dockerfile
         platforms: linux/amd64,linux/arm64
         push: true
-        tags: ${{ steps.cleaner-meta.outputs.tags }}
-        labels: ${{ steps.cleaner-meta.outputs.labels }}
-        cache-from: type=gha,scope=cleaner
-        cache-to: type=gha,mode=max,scope=cleaner
+        tags: ${{ steps.osv-scanner-meta.outputs.tags }}
+        labels: ${{ steps.osv-scanner-meta.outputs.labels }}
+        cache-from: type=gha,scope=osv-scanner
+        cache-to: type=gha,mode=max,scope=osv-scanner
+        annotations: |
+          org.opencontainers.image.visibility=public
+
+  build-and-push-coordinator:
+    name: Build and Push Coordinator Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: make test
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract coordinator metadata
+      id: coordinator-meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.COORDINATOR_IMAGE_NAME }}
+        tags: |
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=raw,value=latest
+
+    - name: Build and push Coordinator Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: deployments/coordinator/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.coordinator-meta.outputs.tags }}
+        labels: ${{ steps.coordinator-meta.outputs.labels }}
+        cache-from: type=gha,scope=coordinator
+        cache-to: type=gha,mode=max,scope=coordinator
         annotations: |
           org.opencontainers.image.visibility=public
 
@@ -336,5 +403,70 @@ jobs:
         labels: ${{ steps.indexer-meta.outputs.labels }}
         cache-from: type=gha,scope=indexer
         cache-to: type=gha,mode=max,scope=indexer
+        annotations: |
+          org.opencontainers.image.visibility=public
+
+  build-and-push-cleaner:
+    name: Build and Push Cleaner Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: make test
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract cleaner metadata
+      id: cleaner-meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.CLEANER_IMAGE_NAME }}
+        tags: |
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=raw,value=latest
+
+    - name: Build and push Cleaner Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: deployments/cleaner/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.cleaner-meta.outputs.tags }}
+        labels: ${{ steps.cleaner-meta.outputs.labels }}
+        cache-from: type=gha,scope=cleaner
+        cache-to: type=gha,mode=max,scope=cleaner
         annotations: |
           org.opencontainers.image.visibility=public

@@ -128,7 +128,9 @@ services:
       - REDIS_PORT=6379
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - INDEX_NAME=heimdall-secrets
+      - VULNERABILITIES_INDEX_NAME=heimdall-vulnerabilities
       - SECRETS_QUEUE_NAME=secrets_queue
+      - OSV_RESULTS_QUEUE_NAME=osv_results_queue
       - MAX_CONCURRENT_WORKERS=2
       - BULK_SIZE=50
       - BULK_FLUSH_INTERVAL=10s

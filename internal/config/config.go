@@ -67,16 +67,18 @@ type CleanerConfig struct {
 
 // IndexerConfig holds the indexer service configuration
 type IndexerConfig struct {
-	RedisHost            string
-	RedisPort            string
-	RedisPassword        string
-	RedisDB              int
-	SecretsQueueName     string
-	MaxConcurrentWorkers int
-	ElasticsearchURL     string
-	IndexName            string
-	BulkSize             int
-	BulkFlushInterval    time.Duration
+	RedisHost                string
+	RedisPort                string
+	RedisPassword            string
+	RedisDB                  int
+	SecretsQueueName         string
+	OSVResultsQueueName      string
+	MaxConcurrentWorkers     int
+	ElasticsearchURL         string
+	IndexName                string
+	VulnerabilitiesIndexName string
+	BulkSize                 int
+	BulkFlushInterval        time.Duration
 }
 
 // OSVScannerConfig holds the OSV scanner service configuration
@@ -377,12 +379,14 @@ func LoadCleanerConfig() (*CleanerConfig, error) {
 // LoadIndexerConfig loads indexer service configuration from environment variables
 func LoadIndexerConfig() (*IndexerConfig, error) {
 	cfg := &IndexerConfig{
-		RedisHost:        os.Getenv("REDIS_HOST"),
-		RedisPort:        os.Getenv("REDIS_PORT"),
-		RedisPassword:    os.Getenv("REDIS_PASSWORD"),
-		SecretsQueueName: os.Getenv("SECRETS_QUEUE_NAME"),
-		ElasticsearchURL: os.Getenv("ELASTICSEARCH_URL"),
-		IndexName:        os.Getenv("INDEX_NAME"),
+		RedisHost:                os.Getenv("REDIS_HOST"),
+		RedisPort:                os.Getenv("REDIS_PORT"),
+		RedisPassword:            os.Getenv("REDIS_PASSWORD"),
+		SecretsQueueName:         os.Getenv("SECRETS_QUEUE_NAME"),
+		OSVResultsQueueName:      os.Getenv("OSV_RESULTS_QUEUE_NAME"),
+		ElasticsearchURL:         os.Getenv("ELASTICSEARCH_URL"),
+		IndexName:                os.Getenv("INDEX_NAME"),
+		VulnerabilitiesIndexName: os.Getenv("VULNERABILITIES_INDEX_NAME"),
 	}
 
 	// Set defaults
@@ -395,11 +399,17 @@ func LoadIndexerConfig() (*IndexerConfig, error) {
 	if cfg.SecretsQueueName == "" {
 		cfg.SecretsQueueName = "secrets_queue"
 	}
+	if cfg.OSVResultsQueueName == "" {
+		cfg.OSVResultsQueueName = "osv_results_queue"
+	}
 	if cfg.ElasticsearchURL == "" {
 		cfg.ElasticsearchURL = "http://localhost:9200"
 	}
 	if cfg.IndexName == "" {
 		cfg.IndexName = "heimdall-secrets"
+	}
+	if cfg.VulnerabilitiesIndexName == "" {
+		cfg.VulnerabilitiesIndexName = "heimdall-vulnerabilities"
 	}
 	cfg.MaxConcurrentWorkers = 2             // Default to 2 concurrent workers
 	cfg.BulkSize = 50                        // Default bulk size

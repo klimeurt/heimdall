@@ -70,6 +70,7 @@ graph TB
     Q6 -->|Coordinate| COO
     COO -->|When both complete| Q7
     Q4 -->|Pull results| IDX
+    Q5 -->|Pull results| IDX
     Q7 -->|Pull jobs| CLE
     CLE -->|Remove repos| SV
     IDX -->|Index findings| ES
@@ -85,7 +86,7 @@ graph TB
     style R fill:#DC382D
     style SV fill:#F5A623
     style ES fill:#005571
-    style GH fill:#333
+    style GH fill:#888
     style KB fill:#F04E98
 ```
 
@@ -97,7 +98,7 @@ graph TB
 4. **OSV Scanner** pulls from `osv_queue`, scans for vulnerabilities, sends results to `osv_results_queue`
 5. **Both Scanners** send completion messages to `coordinator_queue`
 6. **Coordinator** waits for both scanners to complete, then sends to `cleanup_queue`
-7. **Indexer** pulls from `secrets_queue`, indexes findings to Elasticsearch
+7. **Indexer** pulls from both `secrets_queue` and `osv_results_queue`, indexes findings to Elasticsearch
 8. **Cleaner** pulls from `cleanup_queue`, removes cloned repositories
 
 ## Quick Start

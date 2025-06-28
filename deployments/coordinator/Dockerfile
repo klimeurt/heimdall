@@ -18,7 +18,7 @@ COPY . .
 RUN go build -ldflags="-w -s" -o coordinator ./cmd/coordinator
 
 # Runtime stage
-FROM alpine:3.20
+FROM alpine:3.22
 
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates && rm -rf /var/cache/apk/*

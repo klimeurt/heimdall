@@ -27,7 +27,7 @@ RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main
     chmod +x /usr/local/bin/trufflehog
 
 # Final stage
-FROM alpine:3.20
+FROM alpine:3.22
 
 # Install only required runtime packages
 RUN apk add --no-cache \

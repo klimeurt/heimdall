@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     ./cmd/indexer
 
 # Final stage
-FROM alpine:3.20
+FROM alpine:3.22
 
 # Install only required runtime packages
 RUN apk add --no-cache \

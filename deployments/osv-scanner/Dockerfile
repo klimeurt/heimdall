@@ -18,7 +18,7 @@ COPY . .
 RUN go build -ldflags="-w -s" -o osv-scanner ./cmd/osv-scanner
 
 # Runtime stage
-FROM alpine:3.20
+FROM alpine:3.22
 
 # Install runtime dependencies
 RUN apk add --no-cache \

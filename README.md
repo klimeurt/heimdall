@@ -1,17 +1,8 @@
 # Heimdall
 
-A security analysis pipeline for GitHub repositories that scans for secrets and sensitive information.
+A security analysis pipeline for GitHub repositories that scans for secrets and dependencies vulnerabilities.
 
 ## Architecture
-
-Seven microservices communicating through Redis queues:
-- **Collector**: Fetches repositories from GitHub organizations
-- **Cloner**: Clones repositories and performs initial analysis
-- **Scanner**: Deep secret scanning using TruffleHog
-- **OSV Scanner**: Vulnerability scanning for open source dependencies
-- **Coordinator**: Coordinates completion of multiple scanners before cleanup
-- **Cleaner**: Removes cloned repositories after all scanning completes
-- **Indexer**: Indexes scan results to Elasticsearch for search and analysis
 
 ```mermaid
 ---
@@ -22,7 +13,7 @@ graph TB
     subgraph "GitHub"
         GH[GitHub API]
     end
-    
+
     subgraph "Heimdall Services"
         COL[Collector<br/>Service]
         CLO[Cloner<br/>Service]
@@ -32,17 +23,17 @@ graph TB
         CLE[Cleaner<br/>Service]
         IDX[Indexer<br/>Service]
     end
-    
+
     subgraph "Storage"
         R[(Redis<br/>Queues)]
         SV[Shared Volume<br/>/shared/heimdall-repos]
         ES[(Elasticsearch)]
     end
-    
+
     subgraph "Visualization"
         KB[Kibana]
     end
-    
+
     subgraph "Redis Queues"
         Q1{{clone_queue}}
         Q2{{processed_queue}}
@@ -52,7 +43,7 @@ graph TB
         Q6{{coordinator_queue}}
         Q7{{cleanup_queue}}
     end
-    
+
     GH -->|Fetch repos| COL
     COL -->|Repository info| Q1
     Q1 -->|Pull jobs| CLO
@@ -90,20 +81,10 @@ graph TB
     style KB fill:#F04E98
 ```
 
-### Data Flow
-
-1. **Collector** periodically fetches repository lists from GitHub organizations
-2. **Cloner** pulls from `clone_queue`, clones repositories to shared volume, sends to both scanner queues
-3. **Scanner (TruffleHog)** pulls from `processed_queue`, scans for secrets, sends results to `secrets_queue`
-4. **OSV Scanner** pulls from `osv_queue`, scans for vulnerabilities, sends results to `osv_results_queue`
-5. **Both Scanners** send completion messages to `coordinator_queue`
-6. **Coordinator** waits for both scanners to complete, then sends to `cleanup_queue`
-7. **Indexer** pulls from both `secrets_queue` and `osv_results_queue`, indexes findings to Elasticsearch
-8. **Cleaner** pulls from `cleanup_queue`, removes cloned repositories
-
 ## Quick Start
 
 ### Prerequisites
+
 - Docker and Docker Compose
 - GitHub token (optional for public repos)
 - Elasticsearch (for indexer service)

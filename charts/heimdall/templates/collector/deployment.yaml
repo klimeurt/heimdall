@@ -1,0 +1,62 @@
+{{- if .Values.collector.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "heimdall.collector.name" . }}
+  labels:
+    {{- include "heimdall.labels" . | nindent 4 }}
+    {{- include "heimdall.componentLabels" "collector" | nindent 4 }}
+spec:
+  replicas: {{ .Values.collector.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "heimdall.selectorLabels" . | nindent 6 }}
+      {{- include "heimdall.componentLabels" "collector" | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "heimdall.selectorLabels" . | nindent 8 }}
+        {{- include "heimdall.componentLabels" "collector" | nindent 8 }}
+    spec:
+      {{- include "heimdall.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "heimdall.serviceAccountName" . }}
+      securityContext:
+        {{- include "heimdall.podSecurityContext" . | nindent 8 }}
+      initContainers:
+      - name: wait-for-redis
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z {{ include "heimdall.fullname" . }}-redis-master {{ .Values.redis.master.service.ports.redis }}; do echo waiting for redis; sleep 2; done;']
+      containers:
+      - name: collector
+        securityContext:
+          {{- include "heimdall.containerSecurityContext" . | nindent 10 }}
+        image: "{{ .Values.global.imageRegistry }}/{{ .Values.collector.image.repository }}:{{ .Values.global.imageTag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.collector.image.pullPolicy }}
+        env:
+        - name: GITHUB_TOKEN
+          {{- if .Values.github.token }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "heimdall.fullname" . }}-github
+              key: token
+          {{- end }}
+        envFrom:
+        - configMapRef:
+            name: {{ include "heimdall.fullname" . }}-config
+        resources:
+          {{- toYaml .Values.collector.resources | nindent 10 }}
+      {{- with .Values.collector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collector.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,61 @@
+{{- if .Values.osvScanner.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "heimdall.osvScanner.name" . }}
+  labels:
+    {{- include "heimdall.labels" . | nindent 4 }}
+    {{- include "heimdall.componentLabels" "osv-scanner" | nindent 4 }}
+spec:
+  replicas: {{ .Values.osvScanner.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "heimdall.selectorLabels" . | nindent 6 }}
+      {{- include "heimdall.componentLabels" "osv-scanner" | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "heimdall.selectorLabels" . | nindent 8 }}
+        {{- include "heimdall.componentLabels" "osv-scanner" | nindent 8 }}
+    spec:
+      {{- include "heimdall.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "heimdall.serviceAccountName" . }}
+      securityContext:
+        {{- include "heimdall.podSecurityContext" . | nindent 8 }}
+      initContainers:
+      - name: wait-for-redis
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z {{ include "heimdall.fullname" . }}-redis-master {{ .Values.redis.master.service.ports.redis }}; do echo waiting for redis; sleep 2; done;']
+      containers:
+      - name: osv-scanner
+        securityContext:
+          {{- include "heimdall.containerSecurityContext" . | nindent 10 }}
+        image: "{{ .Values.global.imageRegistry }}/{{ .Values.osvScanner.image.repository }}:{{ .Values.global.imageTag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.osvScanner.image.pullPolicy }}
+        envFrom:
+        - configMapRef:
+            name: {{ include "heimdall.fullname" . }}-config
+        volumeMounts:
+        - name: shared-volume
+          mountPath: {{ .Values.global.sharedVolumePath }}
+        resources:
+          {{- toYaml .Values.osvScanner.resources | nindent 10 }}
+      volumes:
+      - name: shared-volume
+        persistentVolumeClaim:
+          claimName: {{ include "heimdall.fullname" . }}-shared
+      {{- with .Values.osvScanner.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.osvScanner.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.osvScanner.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,291 @@
+# Default values for heimdall.
+
+# Global settings
+global:
+  # Image pull secrets for all services
+  imagePullSecrets: []
+  # Shared volume path inside containers
+  sharedVolumePath: /shared/heimdall-repos
+  # Image registry for all Heimdall services
+  imageRegistry: ghcr.io/klimeurt
+  # Image tag for all Heimdall services (defaults to Chart appVersion)
+  imageTag: ""
+
+# GitHub configuration
+github:
+  # REQUIRED: GitHub organization to scan
+  org: ""
+  # GitHub access token (required for private repos)
+  token: ""
+  # Delay between GitHub API calls in milliseconds
+  apiDelayMs: "100"
+
+# Queue names configuration
+queues:
+  clone: "clone_queue"
+  processed: "processed_queue"
+  secrets: "secrets_queue"
+  osv: "osv_queue"
+  coordinator: "coordinator_queue"
+  cleanup: "cleanup_queue"
+
+# Persistence configuration for shared volume
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteMany
+  size: 100Gi
+  annotations: {}
+
+# Init volume job configuration
+initVolume:
+  enabled: true
+  image:
+    repository: busybox
+    tag: "1.36"
+    pullPolicy: IfNotPresent
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Collector service configuration
+collector:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: heimdall-collector
+    pullPolicy: IfNotPresent
+  # Cron schedule for collection (default: daily at midnight)
+  schedule: "0 0 * * *"
+  batchSize: "10"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Cloner service configuration
+cloner:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: heimdall-cloner
+    pullPolicy: IfNotPresent
+  maxConcurrent: "5"
+  timeoutMinutes: "30"
+  shallowClone: "false"
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Scanner (TruffleHog) service configuration
+scanner:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: heimdall-scanner-trufflehog
+    pullPolicy: IfNotPresent
+  maxConcurrent: "10"
+  timeoutMinutes: "30"
+  trufflehogConcurrency: "5"
+  trufflehogOnlyVerified: "false"
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# OSV Scanner service configuration
+osvScanner:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: heimdall-scanner-osv
+    pullPolicy: IfNotPresent
+  maxConcurrent: "10"
+  timeoutMinutes: "30"
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Coordinator service configuration
+coordinator:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: heimdall-coordinator
+    pullPolicy: IfNotPresent
+  timeoutMinutes: "60"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Indexer service configuration
+indexer:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: heimdall-indexer
+    pullPolicy: IfNotPresent
+  secretsIndex: "heimdall-secrets"
+  vulnsIndex: "heimdall-vulnerabilities"
+  batchSize: "100"
+  flushInterval: "10s"
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Cleaner service configuration
+cleaner:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: heimdall-cleaner
+    pullPolicy: IfNotPresent
+  maxConcurrent: "5"
+  delaySeconds: "10"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Redis configuration
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+    password: ""
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    service:
+      ports:
+        redis: 6379
+  replica:
+    replicaCount: 0
+
+# External Redis configuration (if redis.enabled=false)
+externalRedis:
+  url: "redis://localhost:6379"
+
+# Elasticsearch configuration
+elasticsearch:
+  enabled: true
+  global:
+    elasticsearch:
+      service:
+        name: elasticsearch
+        ports:
+          restAPI: 9200
+  master:
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 30Gi
+  data:
+    replicaCount: 0
+  coordinating:
+    replicaCount: 0
+  ingest:
+    replicaCount: 0
+
+# External Elasticsearch configuration (if elasticsearch.enabled=false)
+externalElasticsearch:
+  url: "http://elasticsearch:9200"
+
+# Kibana configuration
+kibana:
+  enabled: true
+  elasticsearch:
+    hosts:
+      - "{{ include \"heimdall.fullname\" . }}-elasticsearch"
+    port: 9200
+  service:
+    type: ClusterIP
+    ports:
+      http: 5601
+  ingress:
+    enabled: false
+    hostname: heimdall-kibana.local
+    annotations: {}
+    tls: false
+
+# Service account configuration
+serviceAccount:
+  create: false
+  annotations: {}
+  name: ""
+
+# Pod security policy
+podSecurityPolicy:
+  enabled: false
+
+# Network policy
+networkPolicy:
+  enabled: false
+
+# Monitoring
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+
+# Autoscaling configuration
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80

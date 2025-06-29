@@ -1,0 +1,48 @@
+{{- if .Values.initVolume.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "heimdall.fullname" . }}-init-volume
+  labels:
+    {{- include "heimdall.labels" . | nindent 4 }}
+    {{- include "heimdall.componentLabels" "init-volume" | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "heimdall.selectorLabels" . | nindent 8 }}
+        {{- include "heimdall.componentLabels" "init-volume" | nindent 8 }}
+    spec:
+      {{- include "heimdall.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: OnFailure
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+      containers:
+      - name: init-volume
+        image: "{{ .Values.initVolume.image.repository }}:{{ .Values.initVolume.image.tag }}"
+        imagePullPolicy: {{ .Values.initVolume.image.pullPolicy }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Setting up shared volume permissions..."
+          mkdir -p {{ .Values.global.sharedVolumePath }}
+          chown -R 1000:1000 {{ .Values.global.sharedVolumePath }}
+          chmod -R 755 {{ .Values.global.sharedVolumePath }}
+          echo "Permissions set successfully"
+        volumeMounts:
+        - name: shared-volume
+          mountPath: {{ .Values.global.sharedVolumePath }}
+        resources:
+          {{- toYaml .Values.initVolume.resources | nindent 10 }}
+      volumes:
+      - name: shared-volume
+        persistentVolumeClaim:
+          claimName: {{ include "heimdall.fullname" . }}-shared
+{{- end }}

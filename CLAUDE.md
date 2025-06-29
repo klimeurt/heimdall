@@ -2,15 +2,30 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Language**: Go 1.24
+
 ## Heimdall Overview
 
-Heimdall is a microservices-based security analysis pipeline for GitHub repositories consisting of four main services:
-- **Collector**: Fetches repositories from GitHub organizations on a schedule
+Heimdall is a microservices-based security analysis pipeline for GitHub repositories consisting of seven main services:
+- **Collector**: Fetches repositories from GitHub organizations on a schedule (cron-based via COLLECTION_SCHEDULE)
 - **Cloner**: Clones repositories to shared volume and performs initial analysis
-- **Scanner**: Performs deep secret scanning using TruffleHog with validation
-- **Cleaner**: Removes cloned repositories from shared volume after scanning
+- **Scanner (TruffleHog)**: Performs deep secret scanning using TruffleHog with validation
+- **OSV Scanner**: Performs vulnerability scanning using Google's OSV scanner
+- **Coordinator**: Manages parallel scanner coordination and synchronization
+- **Indexer**: Pushes scan results to Elasticsearch for analysis
+- **Cleaner**: Removes cloned repositories from shared volume after all scanning completes
 
-Services communicate through Redis queues: `clone_queue` → `processed_queue` → `secrets_queue` → `cleanup_queue`
+Services communicate through Redis queues with parallel processing:
+```
+collector → clone_queue → cloner → processed_queue → ┌─→ scanner → secrets_queue ─┐
+                                                      └─→ osv-scanner → osv_queue ─┘
+                                                                             ↓
+                                   coordinator_queue ← coordinator ← both scanners
+                                            ↓
+                                      cleanup_queue → cleaner
+```
+
+For a visual architecture diagram, see the mermaid diagram in README.md.
 
 ## Common Development Commands
 
@@ -24,13 +39,19 @@ make build-collector
 make build-cloner
 make build-scanner
 make build-cleaner
+make build-osv-scanner
+make build-coordinator
+make build-indexer
 
 # Build Docker images
 make docker-build        # all images
 make docker-build-collector
 make docker-build-cloner
-make docker-build-scanner
+make docker-build-scanner       # builds heimdall-scanner-trufflehog image
 make docker-build-cleaner
+make docker-build-osv-scanner   # builds heimdall-scanner-osv image
+make docker-build-coordinator
+make docker-build-indexer
 
 # Push Docker images to registry
 make docker-push         # all images
@@ -38,6 +59,9 @@ make docker-push-collector
 make docker-push-cloner
 make docker-push-scanner
 make docker-push-cleaner
+make docker-push-osv-scanner
+make docker-push-coordinator
+make docker-push-indexer
 ```
 
 ### Testing
@@ -58,6 +82,9 @@ make test-all
 go test -v ./internal/collector/...
 go test -v ./internal/cloner/...
 go test -v ./internal/scanner/...
+go test -v ./internal/osv_scanner/...
+go test -v ./internal/coordinator/...
+go test -v ./internal/indexer/...
 
 # Generate coverage reports
 make test-coverage      # Unit tests only
@@ -70,13 +97,16 @@ make test-coverage-all  # All tests including integration
 docker run -d -p 6379:6379 redis:alpine
 
 # Run services (each in separate terminal)
-make run-collector  # or go run ./cmd/collector
-make run-cloner     # or go run ./cmd/cloner
-make run-scanner    # or go run ./cmd/scanner
-make run-cleaner    # or go run ./cmd/cleaner
+make run-collector     # or go run ./cmd/collector
+make run-cloner        # or go run ./cmd/cloner
+make run-scanner       # or go run ./cmd/scanner
+make run-osv-scanner   # or go run ./cmd/osv-scanner
+make run-coordinator   # or go run ./cmd/coordinator
+make run-indexer       # or go run ./cmd/indexer
+make run-cleaner       # or go run ./cmd/cleaner
 
 # Monitor queues and disk space
-make run-monitor    # or go run ./cmd/monitor
+make run-monitor       # or go run ./cmd/monitor
 ```
 
 ### Docker Compose
@@ -139,6 +169,13 @@ All services use environment variables loaded through `internal/config/`:
 - Each service has its own config struct
 - Default values provided
 - Redis connection shared across services
+- Key environment variables:
+  - `COLLECTION_SCHEDULE`: Cron expression for collector (default: "0 0 * * *")
+  - `GITHUB_ORG`: GitHub organization to scan
+  - `GITHUB_TOKEN`: GitHub access token for API calls
+  - `GITHUB_API_DELAY_MS`: Delay between API calls for rate limiting
+  - `REDIS_URL`: Redis connection string (default: "redis://localhost:6379")
+  - `SHARED_VOLUME_PATH`: Path for cloned repositories (default: "/shared/heimdall-repos")
 
 ### Worker Pool Pattern
 All processing services use concurrent worker pools:
@@ -149,14 +186,30 @@ All processing services use concurrent worker pools:
 ### Queue Message Flow
 1. Collector → `clone_queue`: `{"org": "name", "name": "repo"}`
 2. Cloner → `processed_queue`: Adds processing metadata and `clone_path`
-3. Scanner → `secrets_queue`: Adds scan results with validated secrets
-4. Scanner → `cleanup_queue`: Sends cleanup job with `clone_path` and metadata
-5. Cleaner: Consumes from `cleanup_queue` and removes directories
+3. Parallel processing:
+   - Scanner → `secrets_queue`: Adds scan results with validated secrets
+   - OSV Scanner → `osv_queue`: Adds vulnerability scan results
+4. Both scanners → `coordinator_queue`: Send completion signals
+5. Coordinator → `cleanup_queue`: Sends cleanup job after both scanners complete
+6. Cleaner: Consumes from `cleanup_queue` and removes directories
+7. Indexer: Monitors `secrets_queue` and `osv_queue` to push results to Elasticsearch
 
 ### Error Handling
 - Services log errors but continue processing other items
 - Failed items are not retried (consider implementing DLQ)
 - Timeouts configured for long operations (scanner: 30min default)
+
+### Elasticsearch/Kibana Integration
+- Indexer pushes results to two Elasticsearch indices:
+  - `heimdall-secrets`: Contains discovered secrets with validation status
+  - `heimdall-vulnerabilities`: Contains OSV scanner vulnerability findings
+- Kibana available at http://localhost:5601 for visualization
+- Index mapping templates automatically applied by indexer
+- Document structure includes repository metadata, timestamps, and scan results
+- Environment variables:
+  - `ELASTICSEARCH_URL`: Elasticsearch endpoint (default: http://elasticsearch:9200)
+  - `ELASTICSEARCH_SECRETS_INDEX`: Index for secrets (default: heimdall-secrets)
+  - `ELASTICSEARCH_VULNS_INDEX`: Index for vulnerabilities (default: heimdall-vulnerabilities)
 
 ## Important Considerations
 

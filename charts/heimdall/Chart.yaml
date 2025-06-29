@@ -1,0 +1,36 @@
+apiVersion: v2
+name: heimdall
+description: A Helm chart for Heimdall - Security analysis pipeline for GitHub repositories
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - security
+  - github
+  - scanner
+  - trufflehog
+  - osv
+  - vulnerability
+home: https://github.com/klimeurt/heimdall
+sources:
+  - https://github.com/klimeurt/heimdall
+maintainers:
+  - name: Heimdall Team
+    email: support@heimdall.io
+icon: https://raw.githubusercontent.com/klimeurt/heimdall/main/logo.png
+annotations:
+  category: Security
+dependencies:
+  - name: redis
+    version: ~21.2.6
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+  - name: elasticsearch
+    version: ~22.0.9
+    repository: https://charts.bitnami.com/bitnami
+    condition: elasticsearch.enabled
+  - name: kibana
+    version: ~12.1.4
+    repository: https://charts.bitnami.com/bitnami
+    condition: kibana.enabled
+kubeVersion: ">=1.19.0-0"

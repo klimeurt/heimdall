@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "heimdall.fullname" . }}-config
+  labels:
+    {{- include "heimdall.labels" . | nindent 4 }}
+data:
+  # Global configuration
+  REDIS_URL: {{ include "heimdall.redisUrl" . | quote }}
+  SHARED_VOLUME_PATH: {{ .Values.global.sharedVolumePath | quote }}
+  
+  # GitHub configuration
+  GITHUB_ORG: {{ .Values.github.org | quote }}
+  GITHUB_API_DELAY_MS: {{ .Values.github.apiDelayMs | quote }}
+  
+  # Queue names
+  CLONE_QUEUE: {{ .Values.queues.clone | quote }}
+  PROCESSED_QUEUE: {{ .Values.queues.processed | quote }}
+  SECRETS_QUEUE: {{ .Values.queues.secrets | quote }}
+  OSV_QUEUE: {{ .Values.queues.osv | quote }}
+  COORDINATOR_QUEUE: {{ .Values.queues.coordinator | quote }}
+  CLEANUP_QUEUE: {{ .Values.queues.cleanup | quote }}
+  
+  # Collector configuration
+  COLLECTION_SCHEDULE: {{ .Values.collector.schedule | quote }}
+  COLLECTOR_BATCH_SIZE: {{ .Values.collector.batchSize | quote }}
+  
+  # Cloner configuration
+  MAX_CONCURRENT_CLONES: {{ .Values.cloner.maxConcurrent | quote }}
+  CLONE_TIMEOUT_MINUTES: {{ .Values.cloner.timeoutMinutes | quote }}
+  SHALLOW_CLONE: {{ .Values.cloner.shallowClone | quote }}
+  
+  # Scanner configuration
+  MAX_CONCURRENT_SCANS: {{ .Values.scanner.maxConcurrent | quote }}
+  SCAN_TIMEOUT_MINUTES: {{ .Values.scanner.timeoutMinutes | quote }}
+  SCANNER_TYPE: "trufflehog"
+  TRUFFLEHOG_CONCURRENCY: {{ .Values.scanner.trufflehogConcurrency | quote }}
+  TRUFFLEHOG_ONLY_VERIFIED: {{ .Values.scanner.trufflehogOnlyVerified | quote }}
+  
+  # OSV Scanner configuration
+  OSV_MAX_CONCURRENT_SCANS: {{ .Values.osvScanner.maxConcurrent | quote }}
+  OSV_SCAN_TIMEOUT_MINUTES: {{ .Values.osvScanner.timeoutMinutes | quote }}
+  OSV_SCANNER_TYPE: "osv"
+  
+  # Coordinator configuration
+  COORDINATOR_TIMEOUT_MINUTES: {{ .Values.coordinator.timeoutMinutes | quote }}
+  
+  # Indexer configuration
+  ELASTICSEARCH_URL: {{ include "heimdall.elasticsearchUrl" . | quote }}
+  ELASTICSEARCH_SECRETS_INDEX: {{ .Values.indexer.secretsIndex | quote }}
+  ELASTICSEARCH_VULNS_INDEX: {{ .Values.indexer.vulnsIndex | quote }}
+  INDEXER_BATCH_SIZE: {{ .Values.indexer.batchSize | quote }}
+  INDEXER_FLUSH_INTERVAL: {{ .Values.indexer.flushInterval | quote }}
+  
+  # Cleaner configuration
+  MAX_CONCURRENT_CLEANUPS: {{ .Values.cleaner.maxConcurrent | quote }}
+  CLEANUP_DELAY_SECONDS: {{ .Values.cleaner.delaySeconds | quote }}

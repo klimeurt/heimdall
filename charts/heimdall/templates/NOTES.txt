@@ -1,0 +1,79 @@
+1. Get the application status by running these commands:
+
+   kubectl get pods -l "app.kubernetes.io/name={{ include "heimdall.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+2. Check the status of each service:
+
+   # Collector
+   kubectl logs -l "app.kubernetes.io/name={{ include "heimdall.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=collector"
+
+   # Cloner
+   kubectl logs -l "app.kubernetes.io/name={{ include "heimdall.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=cloner"
+
+   # Scanner (TruffleHog)
+   kubectl logs -l "app.kubernetes.io/name={{ include "heimdall.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=scanner"
+
+   # OSV Scanner
+   kubectl logs -l "app.kubernetes.io/name={{ include "heimdall.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=osv-scanner"
+
+   # Coordinator
+   kubectl logs -l "app.kubernetes.io/name={{ include "heimdall.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=coordinator"
+
+   # Indexer
+   kubectl logs -l "app.kubernetes.io/name={{ include "heimdall.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=indexer"
+
+   # Cleaner
+   kubectl logs -l "app.kubernetes.io/name={{ include "heimdall.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=cleaner"
+
+{{- if .Values.kibana.enabled }}
+
+3. Access Kibana:
+
+   {{- if .Values.kibana.ingress.enabled }}
+   Visit http{{ if .Values.kibana.ingress.tls }}s{{ end }}://{{ .Values.kibana.ingress.hostname }}
+   {{- else }}
+   kubectl port-forward svc/{{ include "heimdall.fullname" . }}-kibana {{ .Values.kibana.service.ports.http }}:{{ .Values.kibana.service.ports.http }}
+   
+   Then visit http://localhost:{{ .Values.kibana.service.ports.http }}
+   {{- end }}
+{{- end }}
+
+{{- if not .Values.github.org }}
+
+WARNING: GitHub organization is not configured!
+Please update your values with:
+  github:
+    org: "your-organization"
+{{- end }}
+
+{{- if and (not .Values.github.token) (not .Values.github.org) }}
+
+WARNING: GitHub token is not configured!
+For private repositories, please create a secret:
+  kubectl create secret generic {{ include "heimdall.fullname" . }}-github \
+    --from-literal=token=YOUR_GITHUB_TOKEN
+{{- end }}
+
+4. Monitor Redis queues:
+
+   kubectl exec -it {{ include "heimdall.fullname" . }}-redis-master-0 -- redis-cli
+
+   # Check queue lengths
+   LLEN clone_queue
+   LLEN processed_queue
+   LLEN secrets_queue
+   LLEN osv_queue
+   LLEN coordinator_queue
+   LLEN cleanup_queue
+
+5. Monitor shared volume usage:
+
+   kubectl exec -it deployment/{{ include "heimdall.cloner.name" . }} -- df -h {{ .Values.global.sharedVolumePath }}
+
+6. Heimdall is configured to run on the following schedule:
+   Collection Schedule: {{ .Values.collector.schedule }}
+
+   The collector will automatically scan the GitHub organization "{{ .Values.github.org }}" 
+   for repositories according to this schedule.
+
+For more information, visit: https://github.com/klimeurt/heimdall

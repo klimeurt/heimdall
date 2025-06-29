@@ -1,0 +1,65 @@
+{{- if .Values.indexer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "heimdall.indexer.name" . }}
+  labels:
+    {{- include "heimdall.labels" . | nindent 4 }}
+    {{- include "heimdall.componentLabels" "indexer" | nindent 4 }}
+spec:
+  replicas: {{ .Values.indexer.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "heimdall.selectorLabels" . | nindent 6 }}
+      {{- include "heimdall.componentLabels" "indexer" | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "heimdall.selectorLabels" . | nindent 8 }}
+        {{- include "heimdall.componentLabels" "indexer" | nindent 8 }}
+    spec:
+      {{- include "heimdall.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "heimdall.serviceAccountName" . }}
+      securityContext:
+        {{- include "heimdall.podSecurityContext" . | nindent 8 }}
+      initContainers:
+      - name: wait-for-redis
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z {{ include "heimdall.fullname" . }}-redis-master {{ .Values.redis.master.service.ports.redis }}; do echo waiting for redis; sleep 2; done;']
+      - name: wait-for-elasticsearch
+        image: busybox:1.36
+        command: 
+        - sh
+        - -c
+        - |
+          {{- if .Values.elasticsearch.enabled }}
+          until nc -z {{ include "heimdall.fullname" . }}-elasticsearch {{ .Values.elasticsearch.service.ports.restAPI }}; do echo waiting for elasticsearch; sleep 2; done;
+          {{- else }}
+          echo "Using external Elasticsearch, skipping wait check"
+          {{- end }}
+      containers:
+      - name: indexer
+        securityContext:
+          {{- include "heimdall.containerSecurityContext" . | nindent 10 }}
+        image: "{{ .Values.global.imageRegistry }}/{{ .Values.indexer.image.repository }}:{{ .Values.global.imageTag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.indexer.image.pullPolicy }}
+        envFrom:
+        - configMapRef:
+            name: {{ include "heimdall.fullname" . }}-config
+        resources:
+          {{- toYaml .Values.indexer.resources | nindent 10 }}
+      {{- with .Values.indexer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.indexer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.indexer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

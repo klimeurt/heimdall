@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/go-github/v57/github"
+	"github.com/google/go-github/v73/github"
 	"github.com/klimeurt/heimdall/internal/config"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/oauth2"

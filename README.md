@@ -18,7 +18,7 @@ graph TB
         COL[Collector<br/>Service]
         CLO[Cloner<br/>Service]
         SCA[Scanner<br/>TruffleHog]
-        OSV[OSV Scanner<br/>Service]
+        OSV[Scanner<br/>OSV]
         COO[Coordinator<br/>Service]
         CLE[Cleaner<br/>Service]
         IDX[Indexer<br/>Service]
@@ -87,7 +87,7 @@ graph TB
 
 - Docker and Docker Compose
 - GitHub token (optional for public repos)
-- Elasticsearch (for indexer service)
+- Redis and Elasticsearch (external deps or from Docker)
 
 ### Launch
 

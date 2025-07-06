@@ -5,7 +5,7 @@ go 1.24
 require (
 	github.com/elastic/go-elasticsearch/v9 v9.0.0
 	github.com/go-git/go-git/v5 v5.16.2
-	github.com/google/go-github/v57 v57.0.0
+	github.com/google/go-github/v73 v73.0.0
 	github.com/redis/go-redis/v9 v9.11.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.10.0

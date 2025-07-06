@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-github/v57/github"
+	"github.com/google/go-github/v73/github"
 	"github.com/klimeurt/heimdall/internal/config"
 )
 

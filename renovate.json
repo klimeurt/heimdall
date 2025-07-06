@@ -1,3 +1,22 @@
 {
-  "extends": ["github>klimeurt/.github"]
+  "extends": ["github>klimeurt/.github"],
+  "packageRules": [
+    {
+      "description": "Group Elastic Stack components together for coordinated updates",
+      "matchPackageNames": [
+        "elasticsearch",
+        "kibana",
+        "docker.elastic.co/elasticsearch/elasticsearch",
+        "docker.elastic.co/kibana/kibana",
+        "github.com/elastic/go-elasticsearch",
+        "github.com/olivere/elastic",
+        "github.com/elastic/go-kibana"
+      ],
+      "matchManagers": ["dockerfile", "gomod"],
+      "matchUpdateTypes": ["minor", "major"],
+      "groupName": "Elastic Stack updates",
+      "groupSlug": "elastic-stack",
+      "automerge": false
+    }
+  ]
 }

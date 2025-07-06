@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/elastic/go-elasticsearch/v8"
-	"github.com/elastic/go-elasticsearch/v8/esapi"
+	"github.com/elastic/go-elasticsearch/v9"
+	"github.com/elastic/go-elasticsearch/v9/esapi"
 	"github.com/klimeurt/heimdall/internal/collector"
 	"github.com/klimeurt/heimdall/internal/config"
 	"github.com/redis/go-redis/v9"

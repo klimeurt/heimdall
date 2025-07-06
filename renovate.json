@@ -9,7 +9,6 @@
         "docker.elastic.co/elasticsearch/elasticsearch",
         "docker.elastic.co/kibana/kibana",
         "github.com/elastic/go-elasticsearch",
-        "github.com/olivere/elastic",
         "github.com/elastic/go-kibana"
       ],
       "matchManagers": ["dockerfile", "gomod"],

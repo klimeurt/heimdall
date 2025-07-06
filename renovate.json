@@ -1,5 +1,5 @@
 {
-  "extends": ["github>klimeurt/.github"],
+  "extends": ["github>klimeurt/renovate-config"],
   "packageRules": [
     {
       "description": "Group Elastic Stack components together for coordinated updates",

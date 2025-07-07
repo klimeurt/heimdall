@@ -15,7 +15,7 @@ RUN go mod download
 COPY . .
 
 # Build the binary
-RUN go build -ldflags="-w -s" -o osv-scanner ./cmd/osv-scanner
+RUN go build -ldflags="-w -s" -o scanner-osv ./cmd/scanner-osv
 
 # Runtime stage
 FROM alpine:3.22
@@ -26,22 +26,22 @@ RUN apk add --no-cache \
     git \
     && rm -rf /var/cache/apk/*
 
-# Install osv-scanner
-RUN wget -O osv-scanner https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 && \
-    chmod +x osv-scanner && \
-    mv osv-scanner /usr/local/bin/
+# Install scanner-osv
+RUN wget -O scanner-osv https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 && \
+    chmod +x scanner-osv && \
+    mv scanner-osv /usr/local/bin/
 
 # Create non-root user
 RUN adduser -D -u 1000 scanner
 
 # Copy binary from builder
-COPY --from=builder /app/osv-scanner /usr/local/bin/heimdall-osv-scanner
+COPY --from=builder /app/scanner-osv /usr/local/bin/heimdall-scanner-osv
 
 # Set ownership
-RUN chown -R scanner:scanner /usr/local/bin/heimdall-osv-scanner
+RUN chown -R scanner:scanner /usr/local/bin/heimdall-scanner-osv
 
 # Switch to non-root user
 USER scanner
 
 # Set entrypoint
-ENTRYPOINT ["/usr/local/bin/heimdall-osv-scanner"]
+ENTRYPOINT ["/usr/local/bin/heimdall-scanner-osv"]

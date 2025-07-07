@@ -186,7 +186,7 @@ func LoadClonerConfig() (*ClonerConfig, error) {
 		RedisHost:          os.Getenv("REDIS_HOST"),
 		RedisPort:          os.Getenv("REDIS_PORT"),
 		RedisPassword:      os.Getenv("REDIS_PASSWORD"),
-		ProcessedQueueName: os.Getenv("PROCESSED_QUEUE_NAME"),
+		ProcessedQueueName: os.Getenv("TRUFFLEHOG_QUEUE_NAME"),
 		OSVQueueName:       os.Getenv("OSV_QUEUE_NAME"),
 		SharedVolumeDir:    os.Getenv("SHARED_VOLUME_DIR"),
 	}
@@ -199,7 +199,7 @@ func LoadClonerConfig() (*ClonerConfig, error) {
 		cfg.RedisPort = "6379"
 	}
 	if cfg.ProcessedQueueName == "" {
-		cfg.ProcessedQueueName = "processed_queue"
+		cfg.ProcessedQueueName = "trufflehog_queue"
 	}
 	if cfg.OSVQueueName == "" {
 		cfg.OSVQueueName = "osv_queue"
@@ -240,8 +240,8 @@ func LoadScannerConfig() (*ScannerConfig, error) {
 		RedisHost:            os.Getenv("REDIS_HOST"),
 		RedisPort:            os.Getenv("REDIS_PORT"),
 		RedisPassword:        os.Getenv("REDIS_PASSWORD"),
-		ProcessedQueueName:   os.Getenv("PROCESSED_QUEUE_NAME"),
-		SecretsQueueName:     os.Getenv("SECRETS_QUEUE_NAME"),
+		ProcessedQueueName:   os.Getenv("TRUFFLEHOG_QUEUE_NAME"),
+		SecretsQueueName:     os.Getenv("TRUFFLEHOG_RESULTS_QUEUE_NAME"),
 		CleanupQueueName:     os.Getenv("CLEANUP_QUEUE_NAME"),
 		CoordinatorQueueName: os.Getenv("COORDINATOR_QUEUE_NAME"),
 		SharedVolumeDir:      os.Getenv("SHARED_VOLUME_DIR"),
@@ -255,10 +255,10 @@ func LoadScannerConfig() (*ScannerConfig, error) {
 		cfg.RedisPort = "6379"
 	}
 	if cfg.ProcessedQueueName == "" {
-		cfg.ProcessedQueueName = "processed_queue"
+		cfg.ProcessedQueueName = "trufflehog_queue"
 	}
 	if cfg.SecretsQueueName == "" {
-		cfg.SecretsQueueName = "secrets_queue"
+		cfg.SecretsQueueName = "trufflehog_results_queue"
 	}
 	if cfg.CleanupQueueName == "" {
 		cfg.CleanupQueueName = "cleanup_queue"
@@ -382,7 +382,7 @@ func LoadIndexerConfig() (*IndexerConfig, error) {
 		RedisHost:                os.Getenv("REDIS_HOST"),
 		RedisPort:                os.Getenv("REDIS_PORT"),
 		RedisPassword:            os.Getenv("REDIS_PASSWORD"),
-		SecretsQueueName:         os.Getenv("SECRETS_QUEUE_NAME"),
+		SecretsQueueName:         os.Getenv("TRUFFLEHOG_RESULTS_QUEUE_NAME"),
 		OSVResultsQueueName:      os.Getenv("OSV_RESULTS_QUEUE_NAME"),
 		ElasticsearchURL:         os.Getenv("ELASTICSEARCH_URL"),
 		IndexName:                os.Getenv("INDEX_NAME"),
@@ -397,7 +397,7 @@ func LoadIndexerConfig() (*IndexerConfig, error) {
 		cfg.RedisPort = "6379"
 	}
 	if cfg.SecretsQueueName == "" {
-		cfg.SecretsQueueName = "secrets_queue"
+		cfg.SecretsQueueName = "trufflehog_results_queue"
 	}
 	if cfg.OSVResultsQueueName == "" {
 		cfg.OSVResultsQueueName = "osv_results_queue"

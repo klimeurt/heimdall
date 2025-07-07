@@ -143,11 +143,11 @@ func (c *Coordinator) processMessage(ctx context.Context, msg *collector.ScanCoo
 
 	// Update job state based on scanner type
 	switch msg.ScannerType {
-	case "trufflehog":
+	case "scanner-trufflehog":
 		job.TruffleHogComplete = true
 		job.TruffleHogStatus = msg.ScanStatus
 		log.Printf("Coordinator: TruffleHog scan completed for %s/%s (status: %s)", msg.Org, msg.Name, msg.ScanStatus)
-	case "osv":
+	case "scanner-osv":
 		job.OSVComplete = true
 		job.OSVStatus = msg.ScanStatus
 		log.Printf("Coordinator: OSV scan completed for %s/%s (status: %s)", msg.Org, msg.Name, msg.ScanStatus)

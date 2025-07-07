@@ -17,8 +17,8 @@ graph TB
     subgraph "Heimdall Services"
         COL[Collector<br/>Service]
         CLO[Cloner<br/>Service]
-        SCA[Scanner<br/>TruffleHog]
-        OSV[Scanner<br/>OSV]
+        TFH[Scanner-TruffleHog<br/>Service]
+        OSV[Scanner-OSV<br/>Service]
         COO[Coordinator<br/>Service]
         CLE[Cleaner<br/>Service]
         IDX[Indexer<br/>Service]
@@ -36,9 +36,9 @@ graph TB
 
     subgraph "Redis Queues"
         Q1{{clone_queue}}
-        Q2{{processed_queue}}
+        Q2{{trufflehog_queue}}
         Q3{{osv_queue}}
-        Q4{{secrets_queue}}
+        Q4{{trufflehog_results_queue}}
         Q5{{osv_results_queue}}
         Q6{{coordinator_queue}}
         Q7{{cleanup_queue}}
@@ -50,13 +50,13 @@ graph TB
     CLO -->|Clone repos| SV
     CLO -->|Job metadata| Q2
     CLO -->|Job metadata| Q3
-    Q2 -->|Pull jobs| SCA
+    Q2 -->|Pull jobs| TFH
     Q3 -->|Pull jobs| OSV
-    SCA -->|Read repos| SV
+    TFH -->|Read repos| SV
     OSV -->|Read repos| SV
-    SCA -->|Scan results| Q4
+    TFH -->|Scan results| Q4
     OSV -->|Scan results| Q5
-    SCA -->|Completion| Q6
+    TFH -->|Completion| Q6
     OSV -->|Completion| Q6
     Q6 -->|Coordinate| COO
     COO -->|When both complete| Q7
@@ -69,7 +69,7 @@ graph TB
     
     style COL fill:#4A90E2
     style CLO fill:#4A90E2
-    style SCA fill:#4A90E2
+    style TFH fill:#4A90E2
     style OSV fill:#4A90E2
     style COO fill:#4A90E2
     style CLE fill:#4A90E2
@@ -117,8 +117,8 @@ docker run -d -p 9200:9200 -e "discovery.type=single-node" elasticsearch:8.11.0
 make build-all
 make run-collector  # In separate terminals
 make run-cloner
-make run-scanner
-make run-osv-scanner
+make run-scanner-trufflehog
+make run-scanner-osv
 make run-coordinator
 make run-cleaner
 make run-indexer

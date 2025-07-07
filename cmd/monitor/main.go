@@ -133,7 +133,7 @@ func loadConfig() *MonitorConfig {
 		RedisHost:       getEnv("REDIS_HOST", "localhost"),
 		RedisPort:       getEnv("REDIS_PORT", "6379"),
 		RedisPassword:   os.Getenv("REDIS_PASSWORD"),
-		RefreshRate:     1 * time.Second,
+		RefreshRate:     5 * time.Second,
 		QueuePattern:    getEnv("QUEUE_PATTERN", "*_queue"),
 		SharedVolumeDir: getEnv("SHARED_VOLUME_DIR", "./shared-repos"),
 	}

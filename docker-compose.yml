@@ -1,5 +1,3 @@
-version: '3.8'
-
 volumes:
   shared-repos:
     driver_opts:
@@ -97,10 +95,10 @@ services:
       - init-volume
     restart: unless-stopped
 
-  scanner:
+  scanner-trufflehog:
     build:
       context: .
-      dockerfile: deployments/scanner/Dockerfile
+      dockerfile: deployments/scanner-trufflehog/Dockerfile
     volumes:
       - ./shared-repos:/shared/heimdall-repos
     environment:
@@ -110,8 +108,8 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - SCAN_TIMEOUT_MINUTES=30
       - SHARED_VOLUME_DIR=/shared/heimdall-repos
-      - PROCESSED_QUEUE_NAME=processed_queue
-      - SECRETS_QUEUE_NAME=secrets_queue
+      - TRUFFLEHOG_QUEUE_NAME=trufflehog_queue
+      - TRUFFLEHOG_RESULTS_QUEUE_NAME=trufflehog_results_queue
       - CLEANUP_QUEUE_NAME=cleanup_queue
       - COORDINATOR_QUEUE_NAME=coordinator_queue
     depends_on:
@@ -129,7 +127,7 @@ services:
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - INDEX_NAME=heimdall-secrets
       - VULNERABILITIES_INDEX_NAME=heimdall-vulnerabilities
-      - SECRETS_QUEUE_NAME=secrets_queue
+      - TRUFFLEHOG_RESULTS_QUEUE_NAME=trufflehog_results_queue
       - OSV_RESULTS_QUEUE_NAME=osv_results_queue
       - MAX_CONCURRENT_WORKERS=2
       - BULK_SIZE=50
@@ -141,10 +139,10 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  osv-scanner:
+  scanner-osv:
     build:
       context: .
-      dockerfile: deployments/osv-scanner/Dockerfile
+      dockerfile: deployments/scanner-osv/Dockerfile
     volumes:
       - ./shared-repos:/shared/heimdall-repos
     environment:

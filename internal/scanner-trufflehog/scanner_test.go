@@ -82,14 +82,14 @@ func TestHandleScanError(t *testing.T) {
 			intCmd.SetVal(1)
 
 			// Expect push to secrets queue
-			mockRedis.On("LPush", mock.Anything, "secrets_queue", mock.Anything).Return(intCmd).Once()
+			mockRedis.On("LPush", mock.Anything, "trufflehog_results_queue", mock.Anything).Return(intCmd).Once()
 
 			// Expect push to coordinator queue
 			mockRedis.On("LPush", mock.Anything, "coordinator_queue", mock.Anything).Return(intCmd).Once()
 
 			scanner := &Scanner{
 				config: &config.ScannerConfig{
-					SecretsQueueName:     "secrets_queue",
+					SecretsQueueName:     "trufflehog_results_queue",
 					CoordinatorQueueName: "coordinator_queue",
 				},
 				redisClient: mockRedis,
@@ -164,7 +164,7 @@ func TestSendCoordinationMessage(t *testing.T) {
 	assert.Equal(t, "/test/path", coordMsg.ClonePath)
 	assert.Equal(t, "test-org", coordMsg.Org)
 	assert.Equal(t, "test-repo", coordMsg.Name)
-	assert.Equal(t, "trufflehog", coordMsg.ScannerType)
+	assert.Equal(t, "scanner-trufflehog", coordMsg.ScannerType)
 	assert.Equal(t, "success", coordMsg.ScanStatus)
 	assert.Equal(t, 1, coordMsg.WorkerID)
 }

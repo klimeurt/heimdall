@@ -34,15 +34,15 @@ func TestScannerIntegration(t *testing.T) {
 	defer redisClient.Close()
 
 	// Clean up test queues
-	redisClient.Del(ctx, "test_processed_queue", "test_secrets_queue", "test_cleanup_queue")
+	redisClient.Del(ctx, "test_trufflehog_queue", "test_trufflehog_results_queue", "test_cleanup_queue")
 
 	// Create test configuration
 	cfg := &config.ScannerConfig{
 		RedisHost:              "localhost",
 		RedisPort:              "6379",
 		RedisDB:                15,
-		ProcessedQueueName:     "test_processed_queue",
-		SecretsQueueName:       "test_secrets_queue",
+		ProcessedQueueName:     "test_trufflehog_queue",
+		SecretsQueueName:       "test_trufflehog_results_queue",
 		CleanupQueueName:       "test_cleanup_queue",
 		MaxConcurrentScans:     1,
 		ScanTimeout:            30 * time.Second,
@@ -147,15 +147,15 @@ func TestScannerWorkerConcurrency(t *testing.T) {
 	defer redisClient.Close()
 
 	// Clean up test queues
-	redisClient.Del(ctx, "test_processed_queue", "test_secrets_queue", "test_cleanup_queue")
+	redisClient.Del(ctx, "test_trufflehog_queue", "test_trufflehog_results_queue", "test_cleanup_queue")
 
 	// Create test configuration with multiple workers
 	cfg := &config.ScannerConfig{
 		RedisHost:              "localhost",
 		RedisPort:              "6379",
 		RedisDB:                15,
-		ProcessedQueueName:     "test_processed_queue",
-		SecretsQueueName:       "test_secrets_queue",
+		ProcessedQueueName:     "test_trufflehog_queue",
+		SecretsQueueName:       "test_trufflehog_results_queue",
 		CleanupQueueName:       "test_cleanup_queue",
 		MaxConcurrentScans:     3,
 		ScanTimeout:            30 * time.Second,

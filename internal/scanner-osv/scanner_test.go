@@ -69,7 +69,7 @@ func TestSendCoordinationMessage(t *testing.T) {
 		ClonePath:    processedRepo.ClonePath,
 		Org:          processedRepo.Org,
 		Name:         processedRepo.Name,
-		ScannerType:  "osv",
+		ScannerType:  "scanner-osv",
 		CompletedAt:  time.Now(),
 		WorkerID:     1,
 		ScanStatus:   "success",
@@ -91,7 +91,7 @@ func TestSendCoordinationMessage(t *testing.T) {
 		return msg.ClonePath == expectedMsg.ClonePath &&
 			msg.Org == expectedMsg.Org &&
 			msg.Name == expectedMsg.Name &&
-			msg.ScannerType == "osv" &&
+			msg.ScannerType == "scanner-osv" &&
 			msg.WorkerID == 1 &&
 			msg.ScanStatus == "success"
 	})).Return(redis.NewIntResult(1, nil))

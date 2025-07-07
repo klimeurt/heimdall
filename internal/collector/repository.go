@@ -87,7 +87,7 @@ type ScanCoordinationMessage struct {
 	ClonePath    string        `json:"clone_path"`
 	Org          string        `json:"org"`
 	Name         string        `json:"name"`
-	ScannerType  string        `json:"scanner_type"` // "trufflehog" or "osv"
+	ScannerType  string        `json:"scanner_type"` // "scanner-trufflehog" or "scanner-osv"
 	CompletedAt  time.Time     `json:"completed_at"`
 	WorkerID     int           `json:"worker_id"`
 	ScanStatus   string        `json:"scan_status"`

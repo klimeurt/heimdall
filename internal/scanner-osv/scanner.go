@@ -46,9 +46,9 @@ func New(cfg *config.OSVScannerConfig) (*Scanner, error) {
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
-	// Verify osv-scanner binary exists
-	if _, err := exec.LookPath("osv-scanner"); err != nil {
-		return nil, fmt.Errorf("osv-scanner binary not found in PATH: %w", err)
+	// Verify scanner-osv binary exists
+	if _, err := exec.LookPath("scanner-osv"); err != nil {
+		return nil, fmt.Errorf("scanner-osv binary not found in PATH: %w", err)
 	}
 
 	return &Scanner{
@@ -202,9 +202,9 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 	return nil
 }
 
-// runOSVScan executes osv-scanner and parses results
+// runOSVScan executes scanner-osv and parses results
 func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]collector.OSVScanResult, error) {
-	// Build osv-scanner command
+	// Build scanner-osv command
 	args := []string{
 		"--format", "json",
 		"--recursive",
@@ -215,14 +215,14 @@ func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]collector.O
 	log.Printf("Running OSV scan on: %s", repoDir)
 
 	// Create command
-	cmd := exec.CommandContext(ctx, "osv-scanner", args...)
+	cmd := exec.CommandContext(ctx, "scanner-osv", args...)
 
 	// Capture output
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
-	// Run osv-scanner
+	// Run scanner-osv
 	err := cmd.Run()
 	if err != nil {
 		// OSV scanner returns exit code 1 when vulnerabilities are found
@@ -231,7 +231,7 @@ func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]collector.O
 			log.Printf("OSV scanner found vulnerabilities (exit code 1)")
 		} else {
 			// Real error
-			return nil, fmt.Errorf("osv-scanner command failed: %w (stderr: %s)", err, stderrBuf.String())
+			return nil, fmt.Errorf("scanner-osv command failed: %w (stderr: %s)", err, stderrBuf.String())
 		}
 	}
 
@@ -285,12 +285,12 @@ func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]collector.O
 	return findings, nil
 }
 
-// OSVOutput represents the JSON output from osv-scanner
+// OSVOutput represents the JSON output from scanner-osv
 type OSVOutput struct {
 	Results []OSVResult `json:"results"`
 }
 
-// OSVResult represents a single result from osv-scanner
+// OSVResult represents a single result from scanner-osv
 type OSVResult struct {
 	Source struct {
 		Path string `json:"path"`
@@ -370,7 +370,7 @@ func (s *Scanner) sendCoordinationMessage(ctx context.Context, workerID int, pro
 		ClonePath:    processedRepo.ClonePath,
 		Org:          processedRepo.Org,
 		Name:         processedRepo.Name,
-		ScannerType:  "osv",
+		ScannerType:  "scanner-osv",
 		CompletedAt:  time.Now(),
 		WorkerID:     workerID,
 		ScanStatus:   status,

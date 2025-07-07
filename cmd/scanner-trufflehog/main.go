@@ -8,11 +8,11 @@ import (
 	"syscall"
 
 	"github.com/klimeurt/heimdall/internal/config"
-	"github.com/klimeurt/heimdall/internal/scanner"
+	"github.com/klimeurt/heimdall/internal/scanner-trufflehog"
 )
 
 func main() {
-	log.Println("Starting heimdall-scanner...")
+	log.Println("Starting heimdall-scanner-trufflehog...")
 
 	// Load configuration
 	cfg, err := config.LoadScannerConfig()
@@ -51,5 +51,5 @@ func main() {
 		}
 	}
 
-	log.Println("heimdall-scanner shutdown complete")
+	log.Println("heimdall-scanner-trufflehog shutdown complete")
 }

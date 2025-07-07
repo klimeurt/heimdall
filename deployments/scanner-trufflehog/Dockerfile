@@ -19,8 +19,8 @@ COPY . .
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s" \
-    -o heimdall-scanner \
-    ./cmd/scanner
+    -o scanner-trufflehog \
+    ./cmd/scanner-trufflehog
 
 # Download TruffleHog binary in builder stage
 RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin && \
@@ -35,11 +35,11 @@ RUN apk add --no-cache \
     git && \
     addgroup -g 1000 scanner && \
     adduser -D -s /bin/sh -u 1000 -G scanner scanner && \
-    mkdir -p /tmp/heimdall-scanner && \
-    chown -R scanner:scanner /tmp/heimdall-scanner
+    mkdir -p /tmp/scanner-trufflehog && \
+    chown -R scanner:scanner /tmp/scanner-trufflehog
 
 # Copy the binaries from builder
-COPY --from=builder /app/heimdall-scanner /usr/local/bin/heimdall-scanner
+COPY --from=builder /app/scanner-trufflehog /usr/local/bin/heimdall-scanner-trufflehog
 COPY --from=builder /usr/local/bin/trufflehog /usr/local/bin/trufflehog
 
 # Switch to non-root user
@@ -49,4 +49,4 @@ USER scanner:scanner
 WORKDIR /home/scanner
 
 # Run the application
-ENTRYPOINT ["/usr/local/bin/heimdall-scanner"]
+ENTRYPOINT ["/usr/local/bin/heimdall-scanner-trufflehog"]

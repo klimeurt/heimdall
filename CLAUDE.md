@@ -7,19 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Heimdall is a microservices-based security analysis pipeline for GitHub repositories consisting of seven main services:
 - **Collector**: Fetches repositories from GitHub organizations on a schedule (cron)
 - **Cloner**: Clones repositories to shared volume and performs initial analysis
-- **Scanner (TruffleHog)**: Performs deep secret scanning using TruffleHog with validation
-- **OSV Scanner**: Scans for known vulnerabilities using Google's OSV database
+- **Scanner-TruffleHog**: Performs deep secret scanning using TruffleHog with validation
+- **Scanner-OSV**: Scans for known vulnerabilities using Google's OSV database
 - **Coordinator**: Coordinates multiple scanners and triggers cleanup when all are done
 - **Indexer**: Indexes findings into Elasticsearch for visualization
 - **Cleaner**: Removes cloned repositories from shared volume after scanning
 
 Services communicate through Redis queues in a pipeline:
 - `clone_queue` → Cloner
-- Cloner → `processed_queue` (for TruffleHog) + `osv_queue` (for OSV Scanner)
-- Scanner → `secrets_queue` + `coordinator_queue`
-- OSV Scanner → `osv_results_queue` + `coordinator_queue`
+- Cloner → `trufflehog_queue` (for Scanner-TruffleHog) + `osv_queue` (for Scanner-OSV)
+- Scanner-TruffleHog → `trufflehog_results_queue` + `coordinator_queue`
+- Scanner-OSV → `osv_results_queue` + `coordinator_queue`
 - Coordinator → `cleanup_queue`
-- Indexer consumes from `secrets_queue` and `osv_results_queue`
+- Indexer consumes from `trufflehog_results_queue` and `osv_results_queue`
 
 ## Common Development Commands
 
@@ -31,30 +31,30 @@ make build-all
 # Build specific service
 make build-collector
 make build-cloner
-make build-scanner
+make build-scanner-trufflehog
 make build-cleaner
 make build-indexer
-make build-osv-scanner
+make build-scanner-osv
 make build-coordinator
 
 # Build Docker images
 make docker-build        # all images
 make docker-build-collector
 make docker-build-cloner
-make docker-build-scanner
+make docker-build-scanner-trufflehog
 make docker-build-cleaner
 make docker-build-indexer
-make docker-build-osv-scanner
+make docker-build-scanner-osv
 make docker-build-coordinator
 
 # Push Docker images to registry
 make docker-push         # all images
 make docker-push-collector
 make docker-push-cloner
-make docker-push-scanner
+make docker-push-scanner-trufflehog
 make docker-push-cleaner
 make docker-push-indexer
-make docker-push-osv-scanner
+make docker-push-scanner-osv
 make docker-push-coordinator
 ```
 
@@ -75,10 +75,10 @@ make test-all
 # Run specific service tests
 go test -v ./internal/collector/...
 go test -v ./internal/cloner/...
-go test -v ./internal/scanner/...
+go test -v ./internal/scanner-trufflehog/...
 go test -v ./internal/cleaner/...
 go test -v ./internal/indexer/...
-go test -v ./internal/osv-scanner/...
+go test -v ./internal/scanner-osv/...
 go test -v ./internal/coordinator/...
 
 # Generate coverage reports
@@ -94,8 +94,8 @@ docker run -d -p 6379:6379 redis:alpine
 # Run services (each in separate terminal)
 make run-collector     # or go run ./cmd/collector
 make run-cloner        # or go run ./cmd/cloner
-make run-scanner       # or go run ./cmd/scanner
-make run-osv-scanner   # or go run ./cmd/osv-scanner
+make run-scanner-trufflehog   # or go run ./cmd/scanner-trufflehog
+make run-scanner-osv          # or go run ./cmd/scanner-osv
 make run-coordinator   # or go run ./cmd/coordinator
 make run-indexer       # or go run ./cmd/indexer
 make run-cleaner       # or go run ./cmd/cleaner
@@ -115,7 +115,7 @@ docker-compose up -d
 
 # View logs
 docker-compose logs -f collector
-docker-compose logs -f scanner
+docker-compose logs -f scanner-trufflehog
 docker-compose logs -f indexer
 
 # Stop all services
@@ -181,8 +181,8 @@ All services use environment variables loaded through `internal/config/`:
 All processing services use concurrent worker pools:
 - Configurable worker count:
   - Cloner: `MAX_CONCURRENT_CLONES` (default: 5)
-  - Scanner: `MAX_CONCURRENT_SCANS` (default: 3)
-  - OSV Scanner: `MAX_CONCURRENT_SCANS` (default: 3)
+  - Scanner-TruffleHog: `MAX_CONCURRENT_SCANS` (default: 3)
+  - Scanner-OSV: `MAX_CONCURRENT_SCANS` (default: 3)
   - Cleaner: `MAX_CONCURRENT_JOBS` (default: 2)
   - Indexer: `MAX_CONCURRENT_WORKERS` (default: 2)
 - Pull from input queue, process, push to output queue
@@ -190,10 +190,10 @@ All processing services use concurrent worker pools:
 
 ### Queue Message Flow
 1. Collector → `clone_queue`: Repository to clone
-2. Cloner → `processed_queue` & `osv_queue`: Adds processing metadata and `clone_path`
-3. TruffleHog Scanner → `secrets_queue` & `coordinator_queue`: Adds scan results with validated secrets
-4. OSV Scanner → `osv_results_queue` & `coordinator_queue`: Adds vulnerability findings
-5. Indexer: Consumes from `secrets_queue` & `osv_results_queue` → Elasticsearch
+2. Cloner → `trufflehog_queue` & `osv_queue`: Adds processing metadata and `clone_path`
+3. Scanner-TruffleHog → `trufflehog_results_queue` & `coordinator_queue`: Adds scan results with validated secrets
+4. Scanner-OSV → `osv_results_queue` & `coordinator_queue`: Adds vulnerability findings
+5. Indexer: Consumes from `trufflehog_results_queue` & `osv_results_queue` → Elasticsearch
 6. Coordinator → `cleanup_queue`: Triggers cleanup when all scanners complete
 7. Cleaner: Consumes from `cleanup_queue` and removes directories
 
@@ -201,8 +201,8 @@ All processing services use concurrent worker pools:
 - Services log errors but continue processing other items
 - Failed items are not retried (consider implementing DLQ)
 - Timeouts configured for long operations:
-  - TruffleHog Scanner: 30min default (`SCAN_TIMEOUT_MINUTES`)
-  - OSV Scanner: 30min default (`SCAN_TIMEOUT_MINUTES`)
+  - Scanner-TruffleHog: 30min default (`SCAN_TIMEOUT_MINUTES`)
+  - Scanner-OSV: 30min default (`SCAN_TIMEOUT_MINUTES`)
   - Coordinator job timeout: 60min default (`JOB_TIMEOUT_MINUTES`)
 
 ## Important Considerations
@@ -210,7 +210,7 @@ All processing services use concurrent worker pools:
 ### Security
 - All containers run as non-root user (UID 1000)
 - GitHub tokens required for private repositories
-- Scanner validates secrets using TruffleHog verification to reduce false positives
+- Scanner-TruffleHog validates secrets using TruffleHog verification to reduce false positives
 - Cleaner validates paths are within shared volume before deletion
 - Automatic cleanup of cloned repositories via queue-based system
 - Shared volume permissions set by init-volume container
@@ -222,7 +222,7 @@ All processing services use concurrent worker pools:
 - API rate limiting support via `GITHUB_API_DELAY_MS`
 - Automatic cleanup prevents disk space exhaustion
 - TruffleHog concurrency configurable via `TRUFFLEHOG_CONCURRENCY` (default: 8)
-- Scanner supports `TRUFFLEHOG_ONLY_VERIFIED` to reduce false positives
+- Scanner-TruffleHog supports `TRUFFLEHOG_ONLY_VERIFIED` to reduce false positives
 - Cloner fetches ALL branches and tags for comprehensive scanning
 - Elasticsearch bulk indexing with configurable `BULK_SIZE` (default: 50) and `BULK_FLUSH_INTERVAL`
 - Coordinator ensures cleanup only after all scanners complete
@@ -237,8 +237,8 @@ All processing services use concurrent worker pools:
   - Indices: `heimdall-secrets` and `heimdall-vulnerabilities`
 - **Docker**: Shared volume requires proper permissions (handled by init-volume)
 - **External Tools**:
-  - TruffleHog installed in Scanner container
-  - OSV Scanner installed in OSV Scanner container
+  - TruffleHog installed in Scanner-TruffleHog container
+  - OSV Scanner installed in Scanner-OSV container
 
 ### Testing Notes
 - Unit tests use mocks for external dependencies

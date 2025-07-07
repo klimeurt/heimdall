@@ -409,7 +409,7 @@ func (s *Scanner) sendCoordinationMessage(ctx context.Context, workerID int, pro
 		ClonePath:    processedRepo.ClonePath,
 		Org:          processedRepo.Org,
 		Name:         processedRepo.Name,
-		ScannerType:  "trufflehog",
+		ScannerType:  "scanner-trufflehog",
 		CompletedAt:  time.Now(),
 		WorkerID:     workerID,
 		ScanStatus:   status,

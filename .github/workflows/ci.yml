@@ -147,7 +147,7 @@ jobs:
           org.opencontainers.image.visibility=public
 
   build-and-push-scanner-trufflehog:
-    name: Build and Push Scanner Docker Image
+    name: Build and Push Scanner-TruffleHog Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -186,8 +186,8 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract scanner metadata
-      id: scanner-meta
+    - name: Extract scanner-trufflehog metadata
+      id: scanner-trufflehog-meta
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.SCANNER_TRUFFLEHOG_IMAGE_NAME }}
@@ -197,22 +197,22 @@ jobs:
           type=semver,pattern={{major}}
           type=raw,value=latest
 
-    - name: Build and push Scanner Docker image
+    - name: Build and push Scanner-TruffleHog Docker image
       uses: docker/build-push-action@v6
       with:
         context: .
-        file: deployments/scanner/Dockerfile
+        file: deployments/scanner-trufflehog/Dockerfile
         platforms: linux/amd64,linux/arm64
         push: true
-        tags: ${{ steps.scanner-meta.outputs.tags }}
-        labels: ${{ steps.scanner-meta.outputs.labels }}
-        cache-from: type=gha,scope=scanner
-        cache-to: type=gha,mode=max,scope=scanner
+        tags: ${{ steps.scanner-trufflehog-meta.outputs.tags }}
+        labels: ${{ steps.scanner-trufflehog-meta.outputs.labels }}
+        cache-from: type=gha,scope=scanner-trufflehog
+        cache-to: type=gha,mode=max,scope=scanner-trufflehog
         annotations: |
           org.opencontainers.image.visibility=public
 
   build-and-push-scanner-osv:
-    name: Build and Push OSV Scanner Docker Image
+    name: Build and Push Scanner-OSV Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -251,8 +251,8 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract osv-scanner metadata
-      id: osv-scanner-meta
+    - name: Extract scanner-osv metadata
+      id: scanner-osv-meta
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.SCANNER_OSV_IMAGE_NAME }}
@@ -262,17 +262,17 @@ jobs:
           type=semver,pattern={{major}}
           type=raw,value=latest
 
-    - name: Build and push OSV Scanner Docker image
+    - name: Build and push Scanner-OSV Docker image
       uses: docker/build-push-action@v6
       with:
         context: .
-        file: deployments/osv-scanner/Dockerfile
+        file: deployments/scanner-osv/Dockerfile
         platforms: linux/amd64,linux/arm64
         push: true
-        tags: ${{ steps.osv-scanner-meta.outputs.tags }}
-        labels: ${{ steps.osv-scanner-meta.outputs.labels }}
-        cache-from: type=gha,scope=osv-scanner
-        cache-to: type=gha,mode=max,scope=osv-scanner
+        tags: ${{ steps.scanner-osv-meta.outputs.tags }}
+        labels: ${{ steps.scanner-osv-meta.outputs.labels }}
+        cache-from: type=gha,scope=scanner-osv
+        cache-to: type=gha,mode=max,scope=scanner-osv
         annotations: |
           org.opencontainers.image.visibility=public
 

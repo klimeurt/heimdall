@@ -8,13 +8,13 @@ import (
 	"syscall"
 
 	"github.com/klimeurt/heimdall/internal/config"
-	osvscanner "github.com/klimeurt/heimdall/internal/osv-scanner"
+	osvscanner "github.com/klimeurt/heimdall/internal/scanner-osv"
 )
 
 var Version = "dev"
 
 func main() {
-	log.Printf("Starting Heimdall OSV Scanner %s", Version)
+	log.Printf("Starting Heimdall Scanner-OSV %s", Version)
 
 	// Load configuration
 	cfg, err := config.LoadOSVScannerConfig()
@@ -47,5 +47,5 @@ func main() {
 		log.Fatalf("Scanner failed: %v", err)
 	}
 
-	log.Println("OSV Scanner stopped")
+	log.Println("Scanner-OSV stopped")
 }

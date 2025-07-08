@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,13 +19,12 @@ import (
 
 // MonitorConfig holds the monitor configuration
 type MonitorConfig struct {
-	RedisHost       string
-	RedisPort       string
-	RedisPassword   string
-	RedisDB         int
-	RefreshRate     time.Duration
-	QueuePattern    string // Pattern to match queue names (e.g., "*_queue")
-	SharedVolumeDir string
+	RedisHost     string
+	RedisPort     string
+	RedisPassword string
+	RedisDB       int
+	RefreshRate   time.Duration
+	QueuePattern  string // Pattern to match queue names (e.g., "*_queue")
 }
 
 // QueueStats holds statistics for a Redis queue
@@ -40,21 +37,12 @@ type QueueStats struct {
 	RecentItems []string
 }
 
-// FolderStats holds statistics for the shared volume folder
-type FolderStats struct {
-	TotalSize  int64
-	RepoCount  int
-	LastSize   int64
-	LastCheck  time.Time
-	GrowthRate float64 // MB per minute
-}
 
 // Monitor holds the monitor state
 type Monitor struct {
 	client      *redis.Client
 	config      *MonitorConfig
 	stats       map[string]*QueueStats
-	folderStats *FolderStats
 	statsMutex  sync.RWMutex
 	startTime   time.Time
 	knownQueues []string // Dynamically discovered queues
@@ -88,12 +76,9 @@ func main() {
 
 	// Create monitor
 	monitor := &Monitor{
-		client: redisClient,
-		config: cfg,
-		stats:  make(map[string]*QueueStats),
-		folderStats: &FolderStats{
-			LastCheck: time.Now(),
-		},
+		client:      redisClient,
+		config:      cfg,
+		stats:       make(map[string]*QueueStats),
 		startTime:   time.Now(),
 		knownQueues: []string{},
 	}
@@ -110,7 +95,6 @@ func main() {
 	defer ticker.Stop()
 
 	// Initial display
-	monitor.updateFolderStats()
 	monitor.displayDashboard(ctx)
 
 	// Monitor queues
@@ -122,7 +106,6 @@ func main() {
 		case <-ticker.C:
 			monitor.discoverQueues(ctx)
 			monitor.updateStats(ctx)
-			monitor.updateFolderStats()
 			monitor.displayDashboard(ctx)
 		}
 	}
@@ -130,12 +113,11 @@ func main() {
 
 func loadConfig() *MonitorConfig {
 	cfg := &MonitorConfig{
-		RedisHost:       getEnv("REDIS_HOST", "localhost"),
-		RedisPort:       getEnv("REDIS_PORT", "6379"),
-		RedisPassword:   os.Getenv("REDIS_PASSWORD"),
-		RefreshRate:     5 * time.Second,
-		QueuePattern:    getEnv("QUEUE_PATTERN", "*_queue"),
-		SharedVolumeDir: getEnv("SHARED_VOLUME_DIR", "./shared-repos"),
+		RedisHost:     getEnv("REDIS_HOST", "localhost"),
+		RedisPort:     getEnv("REDIS_PORT", "6379"),
+		RedisPassword: os.Getenv("REDIS_PASSWORD"),
+		RefreshRate:   5 * time.Second,
+		QueuePattern:  getEnv("QUEUE_PATTERN", "*_queue"),
 	}
 
 	// Parse Redis DB
@@ -355,33 +337,6 @@ func (m *Monitor) displayDashboard(ctx context.Context) {
 	fmt.Println("  └────────────────────┴──────────┴────────────┴─────────────────────────────┘")
 	fmt.Println()
 
-	// Shared Volume Stats
-	fmt.Println("  Shared Volume Statistics:")
-	fmt.Println("  ┌────────────────────┬──────────────┬────────────┬────────────────────────┐")
-	fmt.Println("  │ Metric             │ Value        │ Growth     │ Details                │")
-	fmt.Println("  ├────────────────────┼──────────────┼────────────┼────────────────────────┤")
-
-	// Format growth rate
-	growthStr := "0.0 MB/m"
-	if m.folderStats.GrowthRate != 0 {
-		growthStr = fmt.Sprintf("%+.1f MB/m", m.folderStats.GrowthRate)
-	}
-
-	// Format details
-	details := fmt.Sprintf("%d repositories", m.folderStats.RepoCount)
-	if len(details) > 20 {
-		details = details[:17] + "..."
-	}
-
-	fmt.Printf("  │ %-18s │ %12s │ %10s │ %-22s │\n",
-		"Disk Usage",
-		formatBytes(m.folderStats.TotalSize),
-		growthStr,
-		details)
-
-	fmt.Println("  └────────────────────┴──────────────┴────────────┴────────────────────────┘")
-	fmt.Println()
-
 	// Summary
 	fmt.Printf("  Summary: %d discovered queues | %d active queues | %d total items\n", len(m.knownQueues), activeQueues, totalItems)
 
@@ -449,86 +404,3 @@ func parseInfoOutput(info string) map[string]string {
 	return result
 }
 
-func (m *Monitor) updateFolderStats() {
-	m.statsMutex.Lock()
-	defer m.statsMutex.Unlock()
-
-	var totalSize int64
-	var repoCount int
-
-	// Log the directory being monitored
-	log.Printf("[DiskMonitor] Monitoring directory: %s", m.config.SharedVolumeDir)
-
-	// Check if directory exists
-	if _, err := os.Stat(m.config.SharedVolumeDir); os.IsNotExist(err) {
-		// Directory doesn't exist, set zero values
-		log.Printf("[DiskMonitor] Directory does not exist: %s", m.config.SharedVolumeDir)
-		m.folderStats.TotalSize = 0
-		m.folderStats.RepoCount = 0
-		m.folderStats.GrowthRate = 0
-		return
-	}
-
-	// Walk through the directory
-	var fileCount int
-	err := filepath.WalkDir(m.config.SharedVolumeDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// Log error but continue walking
-			if !os.IsPermission(err) {
-				log.Printf("[DiskMonitor] Error accessing path %s: %v", path, err)
-			}
-			return nil
-		}
-
-		// Count top-level directories as repositories
-		if d.IsDir() && filepath.Dir(path) == m.config.SharedVolumeDir && path != m.config.SharedVolumeDir {
-			repoCount++
-		}
-
-		// Add file sizes
-		if !d.IsDir() {
-			info, err := d.Info()
-			if err == nil {
-				totalSize += info.Size()
-				fileCount++
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		log.Printf("[DiskMonitor] Error walking directory %s: %v", m.config.SharedVolumeDir, err)
-		return
-	}
-
-	// Log summary
-	log.Printf("[DiskMonitor] Found %d repositories with %d files, total size: %s", repoCount, fileCount, formatBytes(totalSize))
-
-	// Calculate growth rate
-	now := time.Now()
-	if m.folderStats.LastSize > 0 {
-		timeDiff := now.Sub(m.folderStats.LastCheck).Minutes()
-		if timeDiff > 0 {
-			sizeDiffMB := float64(totalSize-m.folderStats.LastSize) / (1024 * 1024)
-			m.folderStats.GrowthRate = sizeDiffMB / timeDiff
-		}
-	}
-
-	m.folderStats.LastSize = totalSize
-	m.folderStats.TotalSize = totalSize
-	m.folderStats.RepoCount = repoCount
-	m.folderStats.LastCheck = now
-}
-
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}

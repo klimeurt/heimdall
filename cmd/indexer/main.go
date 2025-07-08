@@ -2,31 +2,40 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/klimeurt/heimdall/internal/config"
 	"github.com/klimeurt/heimdall/internal/indexer"
+	"github.com/klimeurt/heimdall/internal/logging"
 )
 
 // Version is set at build time
 var Version = "dev"
 
 func main() {
-	log.Printf("Starting heimdall-indexer %s...", Version)
+	// Initialize logger
+	logConfig := logging.DefaultConfig("indexer")
+	logConfig.Version = Version
+	logger := logging.NewLogger(logConfig)
+	slog.SetDefault(logger)
+
+	logger.Info("starting heimdall-indexer", slog.String("version", Version))
 
 	// Load configuration
 	cfg, err := config.LoadIndexerConfig()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		logger.Error("failed to load configuration", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
 	// Create indexer instance
-	indexerService, err := indexer.New(cfg)
+	indexerService, err := indexer.New(cfg, logger)
 	if err != nil {
-		log.Fatalf("Failed to create indexer: %v", err)
+		logger.Error("failed to create indexer", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 	defer indexerService.Close()
 
@@ -46,13 +55,14 @@ func main() {
 	// Wait for shutdown signal or error
 	select {
 	case <-sigChan:
-		log.Println("Received shutdown signal")
+		logger.Info("received shutdown signal")
 		cancel()
 	case err := <-errChan:
 		if err != nil {
-			log.Fatalf("Indexer error: %v", err)
+			logger.Error("indexer error", slog.String("error", err.Error()))
+			os.Exit(1)
 		}
 	}
 
-	log.Println("heimdall-indexer shutdown complete")
+	logger.Info("heimdall-indexer shutdown complete")
 }

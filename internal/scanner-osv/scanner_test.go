@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/klimeurt/heimdall/internal/collector"
+	"github.com/klimeurt/heimdall/internal/types"
 	"github.com/klimeurt/heimdall/internal/config"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -44,65 +44,6 @@ func (m *MockRedisClient) Close() error {
 	return args.Error(0)
 }
 
-func TestSendCoordinationMessage(t *testing.T) {
-	// Create mock Redis client
-	mockRedis := new(MockRedisClient)
-
-	// Create scanner with mock
-	scanner := &Scanner{
-		config: &config.OSVScannerConfig{
-			CoordinatorQueueName: "coordinator_queue",
-		},
-		redisClient: mockRedis,
-	}
-
-	// Test data
-	processedRepo := &collector.ProcessedRepository{
-		ClonePath: "/shared/heimdall-repos/test_repo_123",
-		Org:       "test-org",
-		Name:      "test-repo",
-	}
-	startTime := time.Now().Add(-5 * time.Minute)
-
-	// Expected coordination message
-	expectedMsg := &collector.ScanCoordinationMessage{
-		ClonePath:    processedRepo.ClonePath,
-		Org:          processedRepo.Org,
-		Name:         processedRepo.Name,
-		ScannerType:  "scanner-osv",
-		CompletedAt:  time.Now(),
-		WorkerID:     1,
-		ScanStatus:   "success",
-		ScanDuration: time.Since(startTime),
-	}
-
-	// Mock LPush call
-	mockRedis.On("LPush", mock.Anything, "coordinator_queue", mock.MatchedBy(func(data []interface{}) bool {
-		if len(data) != 1 {
-			return false
-		}
-
-		// Unmarshal and check the message
-		var msg collector.ScanCoordinationMessage
-		if err := json.Unmarshal(data[0].([]byte), &msg); err != nil {
-			return false
-		}
-
-		return msg.ClonePath == expectedMsg.ClonePath &&
-			msg.Org == expectedMsg.Org &&
-			msg.Name == expectedMsg.Name &&
-			msg.ScannerType == "scanner-osv" &&
-			msg.WorkerID == 1 &&
-			msg.ScanStatus == "success"
-	})).Return(redis.NewIntResult(1, nil))
-
-	// Test
-	err := scanner.sendCoordinationMessage(context.Background(), 1, processedRepo, "success", startTime)
-
-	// Assertions
-	assert.NoError(t, err)
-	mockRedis.AssertExpectations(t)
-}
 
 func TestHandleScanError(t *testing.T) {
 	// Create mock Redis client
@@ -112,13 +53,12 @@ func TestHandleScanError(t *testing.T) {
 	scanner := &Scanner{
 		config: &config.OSVScannerConfig{
 			OSVResultsQueueName:  "osv_results_queue",
-			CoordinatorQueueName: "coordinator_queue",
 		},
 		redisClient: mockRedis,
 	}
 
 	// Test data
-	processedRepo := &collector.ProcessedRepository{
+	processedRepo := &types.ProcessedRepository{
 		ClonePath:   "/shared/heimdall-repos/test_repo_123",
 		Org:         "test-org",
 		Name:        "test-repo",
@@ -134,7 +74,7 @@ func TestHandleScanError(t *testing.T) {
 		}
 
 		// Unmarshal and check the scanned repo
-		var scannedRepo collector.OSVScannedRepository
+		var scannedRepo types.OSVScannedRepository
 		if err := json.Unmarshal(data[0].([]byte), &scannedRepo); err != nil {
 			return false
 		}
@@ -146,7 +86,6 @@ func TestHandleScanError(t *testing.T) {
 			scannedRepo.ErrorMessage == scanError.Error()
 	})).Return(redis.NewIntResult(1, nil))
 
-	mockRedis.On("LPush", mock.Anything, "coordinator_queue", mock.Anything).Return(redis.NewIntResult(1, nil))
 
 	// Test
 	err := scanner.handleScanError(context.Background(), 1, processedRepo, startTime, scanError)
@@ -162,7 +101,7 @@ func TestParseOSVOutput(t *testing.T) {
 		name           string
 		osvOutput      OSVOutput
 		expectedCount  int
-		checkFirstVuln func(t *testing.T, vuln collector.OSVScanResult)
+		checkFirstVuln func(t *testing.T, vuln types.OSVScanResult)
 	}{
 		{
 			name: "single vulnerability",
@@ -208,7 +147,7 @@ func TestParseOSVOutput(t *testing.T) {
 				},
 			},
 			expectedCount: 1,
-			checkFirstVuln: func(t *testing.T, vuln collector.OSVScanResult) {
+			checkFirstVuln: func(t *testing.T, vuln types.OSVScanResult) {
 				assert.Equal(t, "GHSA-p6mc-m468-83gw", vuln.ID)
 				assert.Equal(t, "lodash", vuln.Package)
 				assert.Equal(t, "4.17.19", vuln.Version)
@@ -264,7 +203,7 @@ func TestParseOSVOutput(t *testing.T) {
 				},
 			},
 			expectedCount: 2,
-			checkFirstVuln: func(t *testing.T, vuln collector.OSVScanResult) {
+			checkFirstVuln: func(t *testing.T, vuln types.OSVScanResult) {
 				assert.Equal(t, "GO-2020-0001", vuln.ID)
 				assert.Equal(t, "github.com/gin-gonic/gin", vuln.Package)
 				assert.Equal(t, "v1.6.3", vuln.Version)
@@ -281,11 +220,11 @@ func TestParseOSVOutput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Convert test output to findings
-			var findings []collector.OSVScanResult
+			var findings []types.OSVScanResult
 			for _, result := range tt.osvOutput.Results {
 				for _, pkg := range result.Packages {
 					for _, vuln := range pkg.Vulnerabilities {
-						finding := collector.OSVScanResult{
+						finding := types.OSVScanResult{
 							ID:          vuln.ID,
 							Package:     pkg.Package.Name,
 							Version:     pkg.Package.Version,

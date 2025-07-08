@@ -5,14 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sync"
 	"time"
 
-	"github.com/klimeurt/heimdall/internal/collector"
+	"github.com/klimeurt/heimdall/internal/types"
 	"github.com/klimeurt/heimdall/internal/config"
+	"github.com/klimeurt/heimdall/internal/logging"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -29,10 +30,11 @@ type RedisClient interface {
 type Scanner struct {
 	config      *config.OSVScannerConfig
 	redisClient RedisClient
+	logger      *slog.Logger
 }
 
 // New creates a new OSV Scanner instance
-func New(cfg *config.OSVScannerConfig) (*Scanner, error) {
+func New(cfg *config.OSVScannerConfig, logger *slog.Logger) (*Scanner, error) {
 	// Create Redis client
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
@@ -46,14 +48,15 @@ func New(cfg *config.OSVScannerConfig) (*Scanner, error) {
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
-	// Verify scanner-osv binary exists
-	if _, err := exec.LookPath("scanner-osv"); err != nil {
-		return nil, fmt.Errorf("scanner-osv binary not found in PATH: %w", err)
+	// Verify osv-scanner binary exists
+	if _, err := exec.LookPath("osv-scanner"); err != nil {
+		return nil, fmt.Errorf("osv-scanner binary not found in PATH: %w", err)
 	}
 
 	return &Scanner{
 		config:      cfg,
 		redisClient: redisClient,
+		logger:      logger,
 	}, nil
 }
 
@@ -62,12 +65,15 @@ func (s *Scanner) Start(ctx context.Context) error {
 	// Log queue length at startup
 	queueLen, err := s.redisClient.LLen(ctx, s.config.OSVQueueName).Result()
 	if err != nil {
-		log.Printf("Failed to get OSV queue length at startup: %v", err)
+		s.logger.Error("failed to get OSV queue length at startup", slog.String("error", err.Error()))
 	} else {
-		log.Printf("OSV queue length at startup: %d items", queueLen)
+		s.logger.Info("OSV queue length at startup",
+			slog.Int64("items", queueLen),
+			slog.String("queue", s.config.OSVQueueName))
 	}
 
-	log.Printf("Starting %d OSV scanner workers", s.config.MaxConcurrentScans)
+	s.logger.Info("starting OSV scanner workers",
+		slog.Int("worker_count", s.config.MaxConcurrentScans))
 
 	var wg sync.WaitGroup
 
@@ -82,14 +88,16 @@ func (s *Scanner) Start(ctx context.Context) error {
 
 	// Wait for all workers to complete
 	wg.Wait()
-	log.Println("All OSV scanner workers have stopped")
+	s.logger.Info("all OSV scanner workers have stopped")
 	return nil
 }
 
 // worker processes repository scan jobs from the Redis queue
 func (s *Scanner) worker(ctx context.Context, workerID int) {
-	log.Printf("OSV Scanner Worker %d started", workerID)
-	defer log.Printf("OSV Scanner Worker %d stopped", workerID)
+	ctx = logging.WithWorker(ctx, workerID)
+	logger := logging.LoggerFromContext(ctx, s.logger)
+	logger.Info("OSV scanner worker started")
+	defer logger.Info("OSV scanner worker stopped")
 
 	for {
 		select {
@@ -105,43 +113,52 @@ func (s *Scanner) worker(ctx context.Context, workerID int) {
 				if ctx.Err() != nil {
 					return // Context cancelled
 				}
-				log.Printf("OSV Scanner Worker %d: Redis error: %v", workerID, err)
+				logger.Error("Redis error", slog.String("error", err.Error()))
 				continue
 			}
 
 			// result[0] is the queue name, result[1] is the data
 			if len(result) < 2 {
-				log.Printf("OSV Scanner Worker %d: Invalid Redis result", workerID)
+				logger.Error("invalid Redis result")
 				continue
 			}
 
 			// Parse processed repository data
-			var processedRepo collector.ProcessedRepository
+			var processedRepo types.ProcessedRepository
 			if err := json.Unmarshal([]byte(result[1]), &processedRepo); err != nil {
-				log.Printf("OSV Scanner Worker %d: Failed to parse processed repository data: %v", workerID, err)
+				logger.Error("failed to parse processed repository data", slog.String("error", err.Error()))
 				continue
 			}
 
 			// Scan the repository for vulnerabilities
 			if err := s.scanRepository(ctx, workerID, &processedRepo); err != nil {
-				log.Printf("OSV Scanner Worker %d: Failed to scan repository %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, err)
+				logger.Error("failed to scan repository",
+					slog.String("org", processedRepo.Org),
+					slog.String("repo", processedRepo.Name),
+					slog.String("error", err.Error()))
 			}
 
 			// Log queue length after job execution
 			queueLen, err := s.redisClient.LLen(ctx, s.config.OSVQueueName).Result()
 			if err != nil {
-				log.Printf("OSV Scanner Worker %d: Failed to get queue length after job: %v", workerID, err)
+				logger.Error("failed to get queue length after job", slog.String("error", err.Error()))
 			} else {
-				log.Printf("OSV Scanner Worker %d: OSV queue length after job: %d items", workerID, queueLen)
+				logger.Debug("OSV queue length after job",
+					slog.Int64("items", queueLen),
+					slog.String("queue", s.config.OSVQueueName))
 			}
 		}
 	}
 }
 
 // scanRepository scans a repository from shared volume with OSV Scanner
-func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRepo *collector.ProcessedRepository) error {
+func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRepo *types.ProcessedRepository) error {
 	startTime := time.Now()
-	log.Printf("OSV Scanner Worker %d: Scanning repository %s/%s for vulnerabilities", workerID, processedRepo.Org, processedRepo.Name)
+	logger := logging.LoggerFromContext(ctx, s.logger)
+	logger.Info("scanning repository for vulnerabilities",
+		slog.String("org", processedRepo.Org),
+		slog.String("repo", processedRepo.Name),
+		slog.String("path", processedRepo.ClonePath))
 
 	// Use the clone path from the processed repository
 	repoDir := processedRepo.ClonePath
@@ -149,8 +166,6 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 	// Validate that the path exists
 	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
 		err := fmt.Errorf("clone path does not exist: %s", repoDir)
-		// Still send coordination message even if path is missing
-		s.sendCoordinationMessage(ctx, workerID, processedRepo, "failed", startTime)
 		return s.handleScanError(ctx, workerID, processedRepo, startTime, err)
 	}
 
@@ -164,7 +179,7 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 	}
 
 	// Create scanned repository data
-	scannedRepo := &collector.OSVScannedRepository{
+	scannedRepo := &types.OSVScannedRepository{
 		Org:                  processedRepo.Org,
 		Name:                 processedRepo.Name,
 		ProcessedAt:          processedRepo.ProcessedAt,
@@ -191,20 +206,20 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 		return fmt.Errorf("failed to push scanned repository to results queue: %w", err)
 	}
 
-	// Send coordination message
-	if err := s.sendCoordinationMessage(ctx, workerID, processedRepo, scannedRepo.ScanStatus, startTime); err != nil {
-		log.Printf("OSV Scanner Worker %d: Failed to send coordination message for %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, err)
-	}
+	// Coordination message removed - no longer using coordinator service
 
-	log.Printf("OSV Scanner Worker %d: Repository %s/%s scanned successfully - found %d vulnerabilities in %v",
-		workerID, processedRepo.Org, processedRepo.Name, len(findings), time.Since(startTime))
+	logger.Info("repository scanned successfully",
+		slog.String("org", processedRepo.Org),
+		slog.String("repo", processedRepo.Name),
+		slog.Int("vulnerabilities_found", len(findings)),
+		slog.Int64("duration_ms", time.Since(startTime).Milliseconds()))
 
 	return nil
 }
 
-// runOSVScan executes scanner-osv and parses results
-func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]collector.OSVScanResult, error) {
-	// Build scanner-osv command
+// runOSVScan executes osv-scanner and parses results
+func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]types.OSVScanResult, error) {
+	// Build osv-scanner command
 	args := []string{
 		"--format", "json",
 		"--recursive",
@@ -212,10 +227,11 @@ func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]collector.O
 	}
 
 	// Log the scan command for debugging
-	log.Printf("Running OSV scan on: %s", repoDir)
+	logger := logging.LoggerFromContext(ctx, s.logger)
+	logger.Debug("running OSV scan", slog.String("path", repoDir))
 
 	// Create command
-	cmd := exec.CommandContext(ctx, "scanner-osv", args...)
+	cmd := exec.CommandContext(ctx, "osv-scanner", args...)
 
 	// Capture output
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -228,10 +244,10 @@ func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]collector.O
 		// OSV scanner returns exit code 1 when vulnerabilities are found
 		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
 			// This is expected when vulnerabilities are found
-			log.Printf("OSV scanner found vulnerabilities (exit code 1)")
+			logger.Debug("OSV scanner found vulnerabilities (exit code 1)")
 		} else {
 			// Real error
-			return nil, fmt.Errorf("scanner-osv command failed: %w (stderr: %s)", err, stderrBuf.String())
+			return nil, fmt.Errorf("osv-scanner command failed: %w (stderr: %s)", err, stderrBuf.String())
 		}
 	}
 
@@ -240,17 +256,17 @@ func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]collector.O
 	if err := json.Unmarshal(stdoutBuf.Bytes(), &osvOutput); err != nil {
 		// If parsing fails, it might be empty output (no vulnerabilities)
 		if stdoutBuf.Len() == 0 {
-			return []collector.OSVScanResult{}, nil
+			return []types.OSVScanResult{}, nil
 		}
 		return nil, fmt.Errorf("failed to parse OSV scanner output: %w", err)
 	}
 
 	// Convert to our format
-	var findings []collector.OSVScanResult
+	var findings []types.OSVScanResult
 	for _, result := range osvOutput.Results {
 		for _, pkg := range result.Packages {
 			for _, vuln := range pkg.Vulnerabilities {
-				finding := collector.OSVScanResult{
+				finding := types.OSVScanResult{
 					ID:          vuln.ID,
 					Package:     pkg.Package.Name,
 					Version:     pkg.Package.Version,
@@ -285,12 +301,12 @@ func (s *Scanner) runOSVScan(ctx context.Context, repoDir string) ([]collector.O
 	return findings, nil
 }
 
-// OSVOutput represents the JSON output from scanner-osv
+// OSVOutput represents the JSON output from osv-scanner
 type OSVOutput struct {
 	Results []OSVResult `json:"results"`
 }
 
-// OSVResult represents a single result from scanner-osv
+// OSVResult represents a single result from osv-scanner
 type OSVResult struct {
 	Source struct {
 		Path string `json:"path"`
@@ -323,8 +339,12 @@ type OSVVulnerability struct {
 }
 
 // handleScanError creates a failed scan result and pushes it to the queue
-func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRepo *collector.ProcessedRepository, startTime time.Time, err error) error {
-	log.Printf("OSV Scanner Worker %d: Error scanning %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, err)
+func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRepo *types.ProcessedRepository, startTime time.Time, err error) error {
+	logger := logging.LoggerFromContext(ctx, s.logger)
+	logger.Error("error scanning repository",
+		slog.String("org", processedRepo.Org),
+		slog.String("repo", processedRepo.Name),
+		slog.String("error", err.Error()))
 
 	status := "failed"
 	if ctx.Err() == context.DeadlineExceeded {
@@ -332,14 +352,14 @@ func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRe
 	}
 
 	// Create failed scan result
-	scannedRepo := &collector.OSVScannedRepository{
+	scannedRepo := &types.OSVScannedRepository{
 		Org:                  processedRepo.Org,
 		Name:                 processedRepo.Name,
 		ProcessedAt:          processedRepo.ProcessedAt,
 		ScannedAt:            time.Now(),
 		WorkerID:             workerID,
 		VulnerabilitiesFound: 0,
-		Vulnerabilities:      []collector.OSVScanResult{},
+		Vulnerabilities:      []types.OSVScanResult{},
 		ScanStatus:           status,
 		ScanDuration:         time.Since(startTime),
 		ErrorMessage:         err.Error(),
@@ -356,40 +376,12 @@ func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRe
 		return fmt.Errorf("failed to push failed scan to queue: %w", pushErr)
 	}
 
-	// Send coordination message even for failed scans
-	if coordErr := s.sendCoordinationMessage(ctx, workerID, processedRepo, status, startTime); coordErr != nil {
-		log.Printf("OSV Scanner Worker %d: Failed to send coordination message for failed scan %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, coordErr)
-	}
+	// Coordination message removed - no longer using coordinator service
 
 	return err // Return original error
 }
 
-// sendCoordinationMessage sends a message to the coordinator when scanning is complete
-func (s *Scanner) sendCoordinationMessage(ctx context.Context, workerID int, processedRepo *collector.ProcessedRepository, status string, startTime time.Time) error {
-	coordMsg := &collector.ScanCoordinationMessage{
-		ClonePath:    processedRepo.ClonePath,
-		Org:          processedRepo.Org,
-		Name:         processedRepo.Name,
-		ScannerType:  "scanner-osv",
-		CompletedAt:  time.Now(),
-		WorkerID:     workerID,
-		ScanStatus:   status,
-		ScanDuration: time.Since(startTime),
-	}
-
-	// Marshal to JSON
-	coordData, err := json.Marshal(coordMsg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal coordination message: %w", err)
-	}
-
-	// Push to coordinator queue
-	if err := s.redisClient.LPush(ctx, s.config.CoordinatorQueueName, coordData).Err(); err != nil {
-		return fmt.Errorf("failed to push coordination message to queue: %w", err)
-	}
-
-	return nil
-}
+// sendCoordinationMessage function removed - no longer using coordinator service
 
 // Close cleanly shuts down the scanner
 func (s *Scanner) Close() {

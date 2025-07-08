@@ -3,7 +3,7 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: ${PWD}/shared-repos
+      device: /tmp/shared-repos
   elasticsearch-data:
 
 services:
@@ -53,7 +53,7 @@ services:
   init-volume:
     image: alpine:latest
     volumes:
-      - ./shared-repos:/shared/heimdall-repos
+      - /tmp/shared-repos:/shared/heimdall-repos
     command: |
       sh -c "
         mkdir -p /shared/heimdall-repos &&
@@ -61,35 +61,30 @@ services:
         chmod -R 755 /shared/heimdall-repos
       "
 
-  collector:
+  sync:
     build:
       context: .
-      dockerfile: deployments/collector/Dockerfile
+      dockerfile: deployments/sync/Dockerfile
+    volumes:
+      - /tmp/shared-repos:/shared/heimdall-repos
     environment:
       - GITHUB_ORG=${GITHUB_ORG}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - RUN_ON_STARTUP=true
-      - GITHUB_PAGE_SIZE=100
-      - GITHUB_API_DELAY_MS=500
-      - COLLECTION_SCHEDULE=${COLLECTION_SCHEDULE:-0 0 * * 0}
-    depends_on:
-      - redis
-    restart: unless-stopped
-
-  cloner:
-    build:
-      context: .
-      dockerfile: deployments/cloner/Dockerfile
-    volumes:
-      - ./shared-repos:/shared/heimdall-repos
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - MAX_CONCURRENT_CLONES=3
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - SHARED_VOLUME_DIR=/shared/heimdall-repos
+      - REDIS_URL=redis://redis:6379
+      - FETCH_ON_STARTUP=true
+      - FETCH_SCHEDULE=${FETCH_SCHEDULE:-0 0 * * 0}
+      - MAX_CONCURRENT_SYNCS=3
+      - SYNC_TIMEOUT_MINUTES=30
+      - SHARED_VOLUME_PATH=/shared/heimdall-repos
+      - TRUFFLEHOG_QUEUE_NAME=trufflehog_queue
+      - OSV_QUEUE_NAME=osv_queue
+      - GITHUB_API_DELAY_MS=100
+      - QUEUE_BATCH_SIZE=10
+      # Logging configuration
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_OUTPUT=${LOG_OUTPUT:-stdout}
+      - LOG_ADD_SOURCE=${LOG_ADD_SOURCE:-false}
     depends_on:
       - redis
       - init-volume
@@ -100,7 +95,7 @@ services:
       context: .
       dockerfile: deployments/scanner-trufflehog/Dockerfile
     volumes:
-      - ./shared-repos:/shared/heimdall-repos
+      - /tmp/shared-repos:/shared/heimdall-repos
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -110,8 +105,36 @@ services:
       - SHARED_VOLUME_DIR=/shared/heimdall-repos
       - TRUFFLEHOG_QUEUE_NAME=trufflehog_queue
       - TRUFFLEHOG_RESULTS_QUEUE_NAME=trufflehog_results_queue
-      - CLEANUP_QUEUE_NAME=cleanup_queue
-      - COORDINATOR_QUEUE_NAME=coordinator_queue
+      # Logging configuration
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_OUTPUT=${LOG_OUTPUT:-stdout}
+      - LOG_ADD_SOURCE=${LOG_ADD_SOURCE:-false}
+    depends_on:
+      - redis
+      - init-volume
+    restart: unless-stopped
+
+
+  scanner-osv:
+    build:
+      context: .
+      dockerfile: deployments/scanner-osv/Dockerfile
+    volumes:
+      - /tmp/shared-repos:/shared/heimdall-repos
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MAX_CONCURRENT_SCANS=3
+      - SCAN_TIMEOUT_MINUTES=30
+      - SHARED_VOLUME_DIR=/shared/heimdall-repos
+      - OSV_QUEUE_NAME=osv_queue
+      - OSV_RESULTS_QUEUE_NAME=osv_results_queue
+      # Logging configuration
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_OUTPUT=${LOG_OUTPUT:-stdout}
+      - LOG_ADD_SOURCE=${LOG_ADD_SOURCE:-false}
     depends_on:
       - redis
       - init-volume
@@ -132,61 +155,14 @@ services:
       - MAX_CONCURRENT_WORKERS=2
       - BULK_SIZE=50
       - BULK_FLUSH_INTERVAL=10s
+      # Logging configuration
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_OUTPUT=${LOG_OUTPUT:-stdout}
+      - LOG_ADD_SOURCE=${LOG_ADD_SOURCE:-false}
     depends_on:
       redis:
         condition: service_started
       elasticsearch:
         condition: service_healthy
-    restart: unless-stopped
-
-  scanner-osv:
-    build:
-      context: .
-      dockerfile: deployments/scanner-osv/Dockerfile
-    volumes:
-      - ./shared-repos:/shared/heimdall-repos
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - MAX_CONCURRENT_SCANS=2
-      - SCAN_TIMEOUT_MINUTES=30
-      - SHARED_VOLUME_DIR=/shared/heimdall-repos
-      - OSV_QUEUE_NAME=osv_queue
-      - OSV_RESULTS_QUEUE_NAME=osv_results_queue
-      - COORDINATOR_QUEUE_NAME=coordinator_queue
-    depends_on:
-      - redis
-      - init-volume
-    restart: unless-stopped
-
-  coordinator:
-    build:
-      context: .
-      dockerfile: deployments/coordinator/Dockerfile
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - COORDINATOR_QUEUE_NAME=coordinator_queue
-      - CLEANUP_QUEUE_NAME=cleanup_queue
-      - JOB_TIMEOUT_MINUTES=60
-      - STATE_CLEANUP_INTERVAL=5m
-    depends_on:
-      - redis
-    restart: unless-stopped
-
-  cleaner:
-    build:
-      context: .
-      dockerfile: deployments/cleaner/Dockerfile
-    volumes:
-      - ./shared-repos:/shared/heimdall-repos
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CLEANUP_QUEUE_NAME=cleanup_queue
-      - SHARED_VOLUME_DIR=/shared/heimdall-repos
-      - MAX_CONCURRENT_JOBS=2
-    depends_on:
-      - redis
-      - init-volume
     restart: unless-stopped

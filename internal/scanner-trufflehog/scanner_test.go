@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/klimeurt/heimdall/internal/collector"
+	"github.com/klimeurt/heimdall/internal/types"
 	"github.com/klimeurt/heimdall/internal/config"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -84,18 +84,15 @@ func TestHandleScanError(t *testing.T) {
 			// Expect push to secrets queue
 			mockRedis.On("LPush", mock.Anything, "trufflehog_results_queue", mock.Anything).Return(intCmd).Once()
 
-			// Expect push to coordinator queue
-			mockRedis.On("LPush", mock.Anything, "coordinator_queue", mock.Anything).Return(intCmd).Once()
 
 			scanner := &Scanner{
 				config: &config.ScannerConfig{
 					SecretsQueueName:     "trufflehog_results_queue",
-					CoordinatorQueueName: "coordinator_queue",
 				},
 				redisClient: mockRedis,
 			}
 
-			processedRepo := &collector.ProcessedRepository{
+			processedRepo := &types.ProcessedRepository{
 				Org:         "test-org",
 				Name:        "test-repo",
 				ProcessedAt: time.Now(),
@@ -114,73 +111,19 @@ func TestHandleScanError(t *testing.T) {
 	}
 }
 
-func TestSendCoordinationMessage(t *testing.T) {
-	ctx := context.Background()
-
-	// Mock Redis client
-	mockRedis := &MockRedisClient{}
-	intCmd := redis.NewIntCmd(ctx)
-	intCmd.SetVal(1)
-	mockRedis.On("LPush", ctx, "coordinator_queue", mock.Anything).Return(intCmd).Once()
-
-	scanner := &Scanner{
-		config: &config.ScannerConfig{
-			CoordinatorQueueName: "coordinator_queue",
-		},
-		redisClient: mockRedis,
-	}
-
-	processedRepo := &collector.ProcessedRepository{
-		Org:       "test-org",
-		Name:      "test-repo",
-		ClonePath: "/test/path",
-	}
-	startTime := time.Now().Add(-5 * time.Minute)
-
-	// Send coordination message
-	err := scanner.sendCoordinationMessage(ctx, 1, processedRepo, "success", startTime)
-	assert.NoError(t, err)
-
-	// Verify Redis call
-	mockRedis.AssertExpectations(t)
-
-	// Verify the pushed data structure
-	calls := mockRedis.Calls
-	assert.Len(t, calls, 1)
-	assert.Equal(t, "LPush", calls[0].Method)
-
-	// Extract and verify the coordination message data
-	args := calls[0].Arguments
-	assert.Len(t, args, 3)
-	assert.Equal(t, "coordinator_queue", args[1])
-
-	// Verify the JSON data
-	values := args[2].([]interface{})
-	assert.Len(t, values, 1)
-
-	var coordMsg collector.ScanCoordinationMessage
-	err = json.Unmarshal(values[0].([]byte), &coordMsg)
-	assert.NoError(t, err)
-	assert.Equal(t, "/test/path", coordMsg.ClonePath)
-	assert.Equal(t, "test-org", coordMsg.Org)
-	assert.Equal(t, "test-repo", coordMsg.Name)
-	assert.Equal(t, "scanner-trufflehog", coordMsg.ScannerType)
-	assert.Equal(t, "success", coordMsg.ScanStatus)
-	assert.Equal(t, 1, coordMsg.WorkerID)
-}
 
 func TestParseTruffleHogOutput(t *testing.T) {
 	tests := []struct {
 		name             string
 		truffleHogOutput string
 		expectedFindings int
-		validateFindings func(t *testing.T, findings []collector.TruffleHogFinding)
+		validateFindings func(t *testing.T, findings []types.TruffleHogFinding)
 	}{
 		{
 			name:             "successful scan with verified secret",
 			truffleHogOutput: `{"SourceMetadata":{"Data":{"Git":{"commit":"abc123","file":"config.yml","email":"test@example.com","repository":"test-repo","timestamp":"2024-01-01T00:00:00Z","line":42}}},"SourceID":1,"SourceType":1,"SourceName":"git","DetectorType":1,"DetectorName":"AWS","DecoderName":"","Verified":true,"Raw":"AKIAIOSFODNN7EXAMPLE","RawV2":"","Redacted":"AKIA****************","ExtraData":{},"StructuredData":null}`,
 			expectedFindings: 1,
-			validateFindings: func(t *testing.T, findings []collector.TruffleHogFinding) {
+			validateFindings: func(t *testing.T, findings []types.TruffleHogFinding) {
 				assert.Equal(t, "AWS", findings[0].SecretType)
 				assert.Equal(t, "config.yml", findings[0].File)
 				assert.Equal(t, 42, findings[0].Line)
@@ -192,7 +135,7 @@ func TestParseTruffleHogOutput(t *testing.T) {
 			name:             "successful scan with unverified secret",
 			truffleHogOutput: `{"SourceMetadata":{"Data":{"Git":{"commit":"def456","file":"test.js","email":"test@example.com","repository":"test-repo","timestamp":"2024-01-01T00:00:00Z","line":10}}},"SourceID":1,"SourceType":1,"SourceName":"git","DetectorType":2,"DetectorName":"GitHub","DecoderName":"","Verified":false,"Raw":"ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","RawV2":"","Redacted":"ghp_************************************","ExtraData":{},"StructuredData":null}`,
 			expectedFindings: 1,
-			validateFindings: func(t *testing.T, findings []collector.TruffleHogFinding) {
+			validateFindings: func(t *testing.T, findings []types.TruffleHogFinding) {
 				assert.Equal(t, "GitHub", findings[0].SecretType)
 				assert.Equal(t, "test.js", findings[0].File)
 				assert.Equal(t, 10, findings[0].Line)
@@ -203,7 +146,7 @@ func TestParseTruffleHogOutput(t *testing.T) {
 			name:             "secret with verification error",
 			truffleHogOutput: `{"SourceMetadata":{"Data":{"Git":{"commit":"xyz789","file":"app.py","line":100}}},"DetectorName":"Slack","Verified":false,"VerificationError":"invalid token"}`,
 			expectedFindings: 1,
-			validateFindings: func(t *testing.T, findings []collector.TruffleHogFinding) {
+			validateFindings: func(t *testing.T, findings []types.TruffleHogFinding) {
 				assert.Equal(t, "Slack", findings[0].SecretType)
 				assert.Contains(t, findings[0].Service, "verification_error: invalid token")
 			},
@@ -246,8 +189,8 @@ func TestParseTruffleHogOutput(t *testing.T) {
 }
 
 // Helper function to parse TruffleHog output (extracted from scanner.go for testing)
-func parseTruffleHogOutput(output []byte) []collector.TruffleHogFinding {
-	var findings []collector.TruffleHogFinding
+func parseTruffleHogOutput(output []byte) []types.TruffleHogFinding {
+	var findings []types.TruffleHogFinding
 
 	lines := bytes.Split(output, []byte("\n"))
 	for _, line := range lines {
@@ -261,7 +204,7 @@ func parseTruffleHogOutput(output []byte) []collector.TruffleHogFinding {
 			continue
 		}
 
-		finding := collector.TruffleHogFinding{
+		finding := types.TruffleHogFinding{
 			SecretType:  result.DetectorName,
 			Description: fmt.Sprintf("Found %s secret", result.DetectorName),
 			File:        result.SourceMetadata.Data.Git.File,

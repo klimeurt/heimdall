@@ -5,15 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/elastic/go-elasticsearch/v9"
 	"github.com/elastic/go-elasticsearch/v9/esapi"
-	"github.com/klimeurt/heimdall/internal/collector"
+	"github.com/klimeurt/heimdall/internal/types"
 	"github.com/klimeurt/heimdall/internal/config"
+	"github.com/klimeurt/heimdall/internal/logging"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -25,6 +26,7 @@ type Indexer struct {
 	bulkBuffer  []BulkDocument
 	bufferMutex sync.Mutex
 	flushTimer  *time.Timer
+	logger      *slog.Logger
 }
 
 // BulkDocument represents a document to be indexed
@@ -84,7 +86,7 @@ type ElasticsearchVulnerabilityDocument struct {
 }
 
 // New creates a new Indexer instance
-func New(cfg *config.IndexerConfig) (*Indexer, error) {
+func New(cfg *config.IndexerConfig, logger *slog.Logger) (*Indexer, error) {
 	// Create Redis client
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
@@ -113,7 +115,10 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 	for i := 0; i < maxRetries; i++ {
 		esClient, err = elasticsearch.NewClient(esConfig)
 		if err != nil {
-			log.Printf("Failed to create Elasticsearch client (attempt %d/%d): %v", i+1, maxRetries, err)
+			logger.Error("failed to create Elasticsearch client",
+				slog.Int("attempt", i+1),
+				slog.Int("max_retries", maxRetries),
+				slog.String("error", err.Error()))
 			if i < maxRetries-1 {
 				time.Sleep(retryDelay)
 				continue
@@ -124,7 +129,10 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 		// Test Elasticsearch connection
 		res, err := esClient.Info()
 		if err != nil {
-			log.Printf("Failed to connect to Elasticsearch (attempt %d/%d): %v", i+1, maxRetries, err)
+			logger.Error("failed to connect to Elasticsearch",
+				slog.Int("attempt", i+1),
+				slog.Int("max_retries", maxRetries),
+				slog.String("error", err.Error()))
 			if i < maxRetries-1 {
 				time.Sleep(retryDelay)
 				continue
@@ -134,7 +142,10 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 		defer res.Body.Close()
 
 		if res.IsError() {
-			log.Printf("Elasticsearch returned error (attempt %d/%d): %s", i+1, maxRetries, res.String())
+			logger.Error("Elasticsearch returned error",
+				slog.Int("attempt", i+1),
+				slog.Int("max_retries", maxRetries),
+				slog.String("response", res.String()))
 			if i < maxRetries-1 {
 				time.Sleep(retryDelay)
 				continue
@@ -143,7 +154,8 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 		}
 
 		// Connection successful
-		log.Printf("Connected to Elasticsearch successfully on attempt %d", i+1)
+		logger.Info("connected to Elasticsearch successfully",
+			slog.Int("attempt", i+1))
 		break
 	}
 
@@ -152,6 +164,7 @@ func New(cfg *config.IndexerConfig) (*Indexer, error) {
 		redisClient: redisClient,
 		esClient:    esClient,
 		bulkBuffer:  make([]BulkDocument, 0, cfg.BulkSize),
+		logger:      logger,
 	}
 
 	// Create indices if they don't exist
@@ -171,19 +184,25 @@ func (i *Indexer) Start(ctx context.Context) error {
 	// Log queue lengths at startup
 	secretsQueueLen, err := i.redisClient.LLen(ctx, i.config.SecretsQueueName).Result()
 	if err != nil {
-		log.Printf("Failed to get secrets queue length at startup: %v", err)
+		i.logger.Error("failed to get secrets queue length at startup", slog.String("error", err.Error()))
 	} else {
-		log.Printf("Secrets queue length at startup: %d items", secretsQueueLen)
+		i.logger.Info("secrets queue length at startup",
+			slog.Int64("items", secretsQueueLen),
+			slog.String("queue", i.config.SecretsQueueName))
 	}
 
 	osvQueueLen, err := i.redisClient.LLen(ctx, i.config.OSVResultsQueueName).Result()
 	if err != nil {
-		log.Printf("Failed to get OSV results queue length at startup: %v", err)
+		i.logger.Error("failed to get OSV results queue length at startup", slog.String("error", err.Error()))
 	} else {
-		log.Printf("OSV results queue length at startup: %d items", osvQueueLen)
+		i.logger.Info("OSV results queue length at startup",
+			slog.Int64("items", osvQueueLen),
+			slog.String("queue", i.config.OSVResultsQueueName))
 	}
 
-	log.Printf("Starting %d secrets indexer workers and %d OSV indexer workers", i.config.MaxConcurrentWorkers, i.config.MaxConcurrentWorkers)
+	i.logger.Info("starting indexer workers",
+		slog.Int("secrets_workers", i.config.MaxConcurrentWorkers),
+		slog.Int("osv_workers", i.config.MaxConcurrentWorkers))
 
 	// Start the flush timer
 	i.startFlushTimer(ctx)
@@ -212,17 +231,19 @@ func (i *Indexer) Start(ctx context.Context) error {
 	wg.Wait()
 
 	// Final flush of any remaining documents
-	log.Printf("Performing final flush before shutdown")
+	i.logger.Info("performing final flush before shutdown")
 	i.flushBulkBuffer(context.Background()) // Use background context to ensure flush completes
 
-	log.Println("All indexer workers have stopped")
+	i.logger.Info("all indexer workers have stopped")
 	return nil
 }
 
 // worker processes repository scan results from the Redis queue
 func (i *Indexer) worker(ctx context.Context, workerID int) {
-	log.Printf("Indexer Worker %d started", workerID)
-	defer log.Printf("Indexer Worker %d stopped", workerID)
+	ctx = logging.WithWorker(ctx, workerID)
+	logger := logging.LoggerFromContext(ctx, i.logger)
+	logger.Info("indexer worker started")
+	defer logger.Info("indexer worker stopped")
 
 	for {
 		select {
@@ -238,34 +259,39 @@ func (i *Indexer) worker(ctx context.Context, workerID int) {
 				if ctx.Err() != nil {
 					return // Context cancelled
 				}
-				log.Printf("Indexer Worker %d: Redis error: %v", workerID, err)
+				logger.Error("Redis error", slog.String("error", err.Error()))
 				continue
 			}
 
 			// result[0] is the queue name, result[1] is the data
 			if len(result) < 2 {
-				log.Printf("Indexer Worker %d: Invalid Redis result", workerID)
+				logger.Error("invalid Redis result")
 				continue
 			}
 
 			// Parse scanned repository data
-			var scannedRepo collector.ScannedRepository
+			var scannedRepo types.ScannedRepository
 			if err := json.Unmarshal([]byte(result[1]), &scannedRepo); err != nil {
-				log.Printf("Indexer Worker %d: Failed to parse scanned repository data: %v", workerID, err)
+				logger.Error("failed to parse scanned repository data", slog.String("error", err.Error()))
 				continue
 			}
 
 			// Index the repository scan results
 			if err := i.indexRepository(ctx, workerID, &scannedRepo); err != nil {
-				log.Printf("Indexer Worker %d: Failed to index repository %s/%s: %v", workerID, scannedRepo.Org, scannedRepo.Name, err)
+				logger.Error("failed to index repository",
+					slog.String("org", scannedRepo.Org),
+					slog.String("repo", scannedRepo.Name),
+					slog.String("error", err.Error()))
 			}
 
 			// Log queue length after job execution
 			queueLen, err := i.redisClient.LLen(ctx, i.config.SecretsQueueName).Result()
 			if err != nil {
-				log.Printf("Indexer Worker %d: Failed to get queue length after job: %v", workerID, err)
+				logger.Error("failed to get queue length after job", slog.String("error", err.Error()))
 			} else {
-				log.Printf("Indexer Worker %d: Queue length after job: %d items", workerID, queueLen)
+				logger.Debug("queue length after job",
+					slog.Int64("items", queueLen),
+					slog.String("queue", i.config.SecretsQueueName))
 			}
 		}
 	}
@@ -273,8 +299,10 @@ func (i *Indexer) worker(ctx context.Context, workerID int) {
 
 // osvWorker processes OSV scanner results from the Redis queue
 func (i *Indexer) osvWorker(ctx context.Context, workerID int) {
-	log.Printf("OSV Indexer Worker %d started", workerID)
-	defer log.Printf("OSV Indexer Worker %d stopped", workerID)
+	ctx = logging.WithWorker(ctx, workerID)
+	logger := logging.LoggerFromContext(ctx, i.logger)
+	logger.Info("OSV indexer worker started")
+	defer logger.Info("OSV indexer worker stopped")
 
 	for {
 		select {
@@ -290,43 +318,52 @@ func (i *Indexer) osvWorker(ctx context.Context, workerID int) {
 				if ctx.Err() != nil {
 					return // Context cancelled
 				}
-				log.Printf("OSV Indexer Worker %d: Redis error: %v", workerID, err)
+				logger.Error("Redis error", slog.String("error", err.Error()))
 				continue
 			}
 
 			// result[0] is the queue name, result[1] is the data
 			if len(result) < 2 {
-				log.Printf("OSV Indexer Worker %d: Invalid Redis result", workerID)
+				logger.Error("invalid Redis result")
 				continue
 			}
 
 			// Parse OSV scanned repository data
-			var osvScannedRepo collector.OSVScannedRepository
+			var osvScannedRepo types.OSVScannedRepository
 			if err := json.Unmarshal([]byte(result[1]), &osvScannedRepo); err != nil {
-				log.Printf("OSV Indexer Worker %d: Failed to parse OSV scanned repository data: %v", workerID, err)
+				logger.Error("failed to parse OSV scanned repository data", slog.String("error", err.Error()))
 				continue
 			}
 
 			// Index the OSV scan results
 			if err := i.indexOSVRepository(ctx, workerID, &osvScannedRepo); err != nil {
-				log.Printf("OSV Indexer Worker %d: Failed to index OSV repository %s/%s: %v", workerID, osvScannedRepo.Org, osvScannedRepo.Name, err)
+				logger.Error("failed to index OSV repository",
+					slog.String("org", osvScannedRepo.Org),
+					slog.String("repo", osvScannedRepo.Name),
+					slog.String("error", err.Error()))
 			}
 
 			// Log queue length after job execution
 			queueLen, err := i.redisClient.LLen(ctx, i.config.OSVResultsQueueName).Result()
 			if err != nil {
-				log.Printf("OSV Indexer Worker %d: Failed to get queue length after job: %v", workerID, err)
+				logger.Error("failed to get queue length after job", slog.String("error", err.Error()))
 			} else {
-				log.Printf("OSV Indexer Worker %d: Queue length after job: %d items", workerID, queueLen)
+				logger.Debug("queue length after job",
+					slog.Int64("items", queueLen),
+					slog.String("queue", i.config.OSVResultsQueueName))
 			}
 		}
 	}
 }
 
 // indexRepository indexes the scan results for a repository
-func (i *Indexer) indexRepository(ctx context.Context, workerID int, scannedRepo *collector.ScannedRepository) error {
+func (i *Indexer) indexRepository(ctx context.Context, workerID int, scannedRepo *types.ScannedRepository) error {
 	startTime := time.Now()
-	log.Printf("Indexer Worker %d: Indexing repository %s/%s with %d secrets", workerID, scannedRepo.Org, scannedRepo.Name, scannedRepo.ValidSecretsFound)
+	logger := logging.LoggerFromContext(ctx, i.logger)
+	logger.Info("indexing repository",
+		slog.String("org", scannedRepo.Org),
+		slog.String("repo", scannedRepo.Name),
+		slog.Int("secrets_found", scannedRepo.ValidSecretsFound))
 
 	// If no secrets found, index a summary document
 	if len(scannedRepo.ValidSecrets) == 0 {
@@ -368,14 +405,21 @@ func (i *Indexer) indexRepository(ctx context.Context, workerID int, scannedRepo
 		}
 	}
 
-	log.Printf("Indexer Worker %d: Repository %s/%s indexed successfully in %v", workerID, scannedRepo.Org, scannedRepo.Name, time.Since(startTime))
+	logger.Info("repository indexed successfully",
+		slog.String("org", scannedRepo.Org),
+		slog.String("repo", scannedRepo.Name),
+		slog.Int64("duration_ms", time.Since(startTime).Milliseconds()))
 	return nil
 }
 
 // indexOSVRepository indexes the OSV scan results for a repository
-func (i *Indexer) indexOSVRepository(ctx context.Context, workerID int, osvScannedRepo *collector.OSVScannedRepository) error {
+func (i *Indexer) indexOSVRepository(ctx context.Context, workerID int, osvScannedRepo *types.OSVScannedRepository) error {
 	startTime := time.Now()
-	log.Printf("OSV Indexer Worker %d: Indexing repository %s/%s with %d vulnerabilities", workerID, osvScannedRepo.Org, osvScannedRepo.Name, osvScannedRepo.VulnerabilitiesFound)
+	logger := logging.LoggerFromContext(ctx, i.logger)
+	logger.Info("indexing OSV repository",
+		slog.String("org", osvScannedRepo.Org),
+		slog.String("repo", osvScannedRepo.Name),
+		slog.Int("vulnerabilities_found", osvScannedRepo.VulnerabilitiesFound))
 
 	// Count vulnerabilities by severity
 	criticalCount := 0
@@ -438,9 +482,16 @@ func (i *Indexer) indexOSVRepository(ctx context.Context, workerID int, osvScann
 	docID := fmt.Sprintf("%s_%s_osv_%d", osvScannedRepo.Org, osvScannedRepo.Name, osvScannedRepo.ScannedAt.Unix())
 	i.addToBulkBuffer(ctx, i.config.VulnerabilitiesIndexName, docID, doc)
 
-	log.Printf("OSV Indexer Worker %d: Repository %s/%s indexed successfully with %d vulnerabilities (Critical:%d, High:%d, Medium:%d, Low:%d) in %v",
-		workerID, osvScannedRepo.Org, osvScannedRepo.Name, osvScannedRepo.VulnerabilitiesFound,
-		criticalCount, highCount, mediumCount, lowCount, time.Since(startTime))
+	logger.Info("OSV repository indexed successfully",
+		slog.String("org", osvScannedRepo.Org),
+		slog.String("repo", osvScannedRepo.Name),
+		slog.Int("total_vulnerabilities", osvScannedRepo.VulnerabilitiesFound),
+		slog.Int("critical", criticalCount),
+		slog.Int("high", highCount),
+		slog.Int("medium", mediumCount),
+		slog.Int("low", lowCount),
+		slog.Int("unknown", unknownCount),
+		slog.Int64("duration_ms", time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -454,14 +505,16 @@ func (i *Indexer) addToBulkBuffer(ctx context.Context, index, id string, doc int
 		Document: doc,
 	})
 
-	log.Printf("Added document to buffer. Buffer size: %d/%d", len(i.bulkBuffer), i.config.BulkSize)
+	i.logger.Debug("added document to buffer",
+		slog.Int("buffer_size", len(i.bulkBuffer)),
+		slog.Int("max_size", i.config.BulkSize))
 
 	shouldFlush := len(i.bulkBuffer) >= i.config.BulkSize
 	i.bufferMutex.Unlock()
 
 	// Flush if buffer is full
 	if shouldFlush {
-		log.Printf("Buffer full, triggering flush")
+		i.logger.Debug("buffer full, triggering flush")
 		i.flushBulkBuffer(ctx)
 	}
 }
@@ -472,11 +525,12 @@ func (i *Indexer) flushBulkBuffer(ctx context.Context) {
 	defer i.bufferMutex.Unlock()
 
 	if len(i.bulkBuffer) == 0 {
-		log.Printf("Flush called but buffer is empty")
+		i.logger.Debug("flush called but buffer is empty")
 		return
 	}
 
-	log.Printf("Flushing %d documents to Elasticsearch", len(i.bulkBuffer))
+	i.logger.Info("flushing documents to Elasticsearch",
+		slog.Int("document_count", len(i.bulkBuffer)))
 
 	// Build bulk request body
 	var buf bytes.Buffer
@@ -489,13 +543,13 @@ func (i *Indexer) flushBulkBuffer(ctx context.Context) {
 			},
 		}
 		if err := json.NewEncoder(&buf).Encode(meta); err != nil {
-			log.Printf("Failed to encode bulk action: %v", err)
+			i.logger.Error("failed to encode bulk action", slog.String("error", err.Error()))
 			continue
 		}
 
 		// Add the document
 		if err := json.NewEncoder(&buf).Encode(doc.Document); err != nil {
-			log.Printf("Failed to encode document: %v", err)
+			i.logger.Error("failed to encode document", slog.String("error", err.Error()))
 			continue
 		}
 	}
@@ -507,7 +561,7 @@ func (i *Indexer) flushBulkBuffer(ctx context.Context) {
 
 	res, err := req.Do(ctx, i.esClient)
 	if err != nil {
-		log.Printf("Failed to execute bulk request: %v", err)
+		i.logger.Error("failed to execute bulk request", slog.String("error", err.Error()))
 		return
 	}
 	defer res.Body.Close()
@@ -515,9 +569,9 @@ func (i *Indexer) flushBulkBuffer(ctx context.Context) {
 	if res.IsError() {
 		var errorResponse map[string]interface{}
 		if err := json.NewDecoder(res.Body).Decode(&errorResponse); err != nil {
-			log.Printf("Bulk request failed: %s", res.String())
+			i.logger.Error("bulk request failed", slog.String("response", res.String()))
 		} else {
-			log.Printf("Bulk request failed: %v", errorResponse)
+			i.logger.Error("bulk request failed", slog.Any("error_response", errorResponse))
 		}
 		return
 	}
@@ -525,10 +579,10 @@ func (i *Indexer) flushBulkBuffer(ctx context.Context) {
 	// Parse response to check for individual errors
 	var bulkResponse map[string]interface{}
 	if err := json.NewDecoder(res.Body).Decode(&bulkResponse); err != nil {
-		log.Printf("Failed to parse bulk response: %v", err)
+		i.logger.Error("failed to parse bulk response", slog.String("error", err.Error()))
 	} else {
 		if errors, ok := bulkResponse["errors"].(bool); ok && errors {
-			log.Printf("Bulk request had errors: %v", bulkResponse)
+			i.logger.Error("bulk request had errors", slog.Any("response", bulkResponse))
 		}
 	}
 
@@ -536,7 +590,8 @@ func (i *Indexer) flushBulkBuffer(ctx context.Context) {
 	docCount := len(i.bulkBuffer)
 	i.bulkBuffer = i.bulkBuffer[:0]
 
-	log.Printf("Successfully indexed %d documents to Elasticsearch", docCount)
+	i.logger.Info("successfully indexed documents to Elasticsearch",
+		slog.Int("document_count", docCount))
 }
 
 // startFlushTimer starts a timer to periodically flush the bulk buffer
@@ -566,7 +621,7 @@ func (i *Indexer) createIndexIfNotExists(ctx context.Context) error {
 	defer exists.Body.Close()
 
 	if exists.StatusCode == 200 {
-		log.Printf("Index %s already exists", i.config.IndexName)
+		i.logger.Info("index already exists", slog.String("index", i.config.IndexName))
 		return nil
 	}
 
@@ -606,7 +661,7 @@ func (i *Indexer) createIndexIfNotExists(ctx context.Context) error {
 		return fmt.Errorf("failed to create index: %s", res.String())
 	}
 
-	log.Printf("Created index %s successfully", i.config.IndexName)
+	i.logger.Info("created index successfully", slog.String("index", i.config.IndexName))
 	return nil
 }
 
@@ -620,7 +675,7 @@ func (i *Indexer) createVulnerabilityIndexIfNotExists(ctx context.Context) error
 	defer exists.Body.Close()
 
 	if exists.StatusCode == 200 {
-		log.Printf("Vulnerability index %s already exists", i.config.VulnerabilitiesIndexName)
+		i.logger.Info("vulnerability index already exists", slog.String("index", i.config.VulnerabilitiesIndexName))
 		return nil
 	}
 
@@ -675,7 +730,7 @@ func (i *Indexer) createVulnerabilityIndexIfNotExists(ctx context.Context) error
 		return fmt.Errorf("failed to create vulnerability index: %s", res.String())
 	}
 
-	log.Printf("Created vulnerability index %s successfully", i.config.VulnerabilitiesIndexName)
+	i.logger.Info("created vulnerability index successfully", slog.String("index", i.config.VulnerabilitiesIndexName))
 	return nil
 }
 

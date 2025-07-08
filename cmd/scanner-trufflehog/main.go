@@ -2,28 +2,36 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/klimeurt/heimdall/internal/config"
+	"github.com/klimeurt/heimdall/internal/logging"
 	"github.com/klimeurt/heimdall/internal/scanner-trufflehog"
 )
 
 func main() {
-	log.Println("Starting heimdall-scanner-trufflehog...")
+	// Initialize logger
+	logConfig := logging.DefaultConfig("scanner-trufflehog")
+	logger := logging.NewLogger(logConfig)
+	slog.SetDefault(logger)
+
+	logger.Info("starting heimdall-scanner-trufflehog")
 
 	// Load configuration
 	cfg, err := config.LoadScannerConfig()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		logger.Error("failed to load configuration", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
 	// Create scanner instance
-	scannerService, err := scanner.New(cfg)
+	scannerService, err := scanner.New(cfg, logger)
 	if err != nil {
-		log.Fatalf("Failed to create scanner: %v", err)
+		logger.Error("failed to create scanner", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 	defer scannerService.Close()
 
@@ -43,13 +51,14 @@ func main() {
 	// Wait for shutdown signal or error
 	select {
 	case <-sigChan:
-		log.Println("Received shutdown signal")
+		logger.Info("received shutdown signal")
 		cancel()
 	case err := <-errChan:
 		if err != nil {
-			log.Fatalf("Scanner error: %v", err)
+			logger.Error("scanner error", slog.String("error", err.Error()))
+			os.Exit(1)
 		}
 	}
 
-	log.Println("heimdall-scanner-trufflehog shutdown complete")
+	logger.Info("heimdall-scanner-trufflehog shutdown complete")
 }

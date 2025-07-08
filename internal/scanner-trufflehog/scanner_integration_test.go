@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/klimeurt/heimdall/internal/collector"
+	"github.com/klimeurt/heimdall/internal/types"
 	"github.com/klimeurt/heimdall/internal/config"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -34,7 +34,7 @@ func TestScannerIntegration(t *testing.T) {
 	defer redisClient.Close()
 
 	// Clean up test queues
-	redisClient.Del(ctx, "test_trufflehog_queue", "test_trufflehog_results_queue", "test_cleanup_queue")
+	redisClient.Del(ctx, "test_trufflehog_queue", "test_trufflehog_results_queue")
 
 	// Create test configuration
 	cfg := &config.ScannerConfig{
@@ -43,7 +43,6 @@ func TestScannerIntegration(t *testing.T) {
 		RedisDB:                15,
 		ProcessedQueueName:     "test_trufflehog_queue",
 		SecretsQueueName:       "test_trufflehog_results_queue",
-		CleanupQueueName:       "test_cleanup_queue",
 		MaxConcurrentScans:     1,
 		ScanTimeout:            30 * time.Second,
 		TruffleHogConcurrency:  1,
@@ -79,7 +78,7 @@ database_password: supersecret123!
 		require.NoError(t, os.WriteFile(secretFile, []byte(secretContent), 0644))
 
 		// Create processed repository data
-		processedRepo := &collector.ProcessedRepository{
+		processedRepo := &types.ProcessedRepository{
 			Org:         "test-org",
 			Name:        "test-repo",
 			ProcessedAt: time.Now(),
@@ -114,7 +113,7 @@ database_password: supersecret123!
 		scannedData, err := redisClient.RPop(ctx, cfg.SecretsQueueName).Result()
 		require.NoError(t, err)
 
-		var scannedRepo collector.ScannedRepository
+		var scannedRepo types.ScannedRepository
 		err = json.Unmarshal([]byte(scannedData), &scannedRepo)
 		require.NoError(t, err)
 
@@ -122,10 +121,6 @@ database_password: supersecret123!
 		assert.Equal(t, "test-repo", scannedRepo.Name)
 		assert.NotEmpty(t, scannedRepo.ScannedAt)
 
-		// Check cleanup queue
-		cleanupLen, err := redisClient.LLen(ctx, cfg.CleanupQueueName).Result()
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), cleanupLen)
 
 		// Cancel context to stop scanner
 		cancel()
@@ -147,7 +142,7 @@ func TestScannerWorkerConcurrency(t *testing.T) {
 	defer redisClient.Close()
 
 	// Clean up test queues
-	redisClient.Del(ctx, "test_trufflehog_queue", "test_trufflehog_results_queue", "test_cleanup_queue")
+	redisClient.Del(ctx, "test_trufflehog_queue", "test_trufflehog_results_queue")
 
 	// Create test configuration with multiple workers
 	cfg := &config.ScannerConfig{
@@ -156,7 +151,6 @@ func TestScannerWorkerConcurrency(t *testing.T) {
 		RedisDB:                15,
 		ProcessedQueueName:     "test_trufflehog_queue",
 		SecretsQueueName:       "test_trufflehog_results_queue",
-		CleanupQueueName:       "test_cleanup_queue",
 		MaxConcurrentScans:     3,
 		ScanTimeout:            30 * time.Second,
 		TruffleHogConcurrency:  1,
@@ -170,7 +164,7 @@ func TestScannerWorkerConcurrency(t *testing.T) {
 
 	// Push multiple items to queue
 	for i := 0; i < 5; i++ {
-		processedRepo := &collector.ProcessedRepository{
+		processedRepo := &types.ProcessedRepository{
 			Org:         "test-org",
 			Name:        fmt.Sprintf("test-repo-%d", i),
 			ProcessedAt: time.Now(),
@@ -206,10 +200,6 @@ func TestScannerWorkerConcurrency(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), secretsLen)
 
-	// Should have 5 items in cleanup queue
-	cleanupLen, err := redisClient.LLen(ctx, cfg.CleanupQueueName).Result()
-	require.NoError(t, err)
-	assert.Equal(t, int64(5), cleanupLen)
 
 	cancel()
 	<-done

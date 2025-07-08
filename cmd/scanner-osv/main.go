@@ -2,30 +2,39 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/klimeurt/heimdall/internal/config"
+	"github.com/klimeurt/heimdall/internal/logging"
 	osvscanner "github.com/klimeurt/heimdall/internal/scanner-osv"
 )
 
 var Version = "dev"
 
 func main() {
-	log.Printf("Starting Heimdall Scanner-OSV %s", Version)
+	// Initialize logger
+	logConfig := logging.DefaultConfig("scanner-osv")
+	logConfig.Version = Version
+	logger := logging.NewLogger(logConfig)
+	slog.SetDefault(logger)
+
+	logger.Info("starting Heimdall Scanner-OSV", slog.String("version", Version))
 
 	// Load configuration
 	cfg, err := config.LoadOSVScannerConfig()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		logger.Error("failed to load configuration", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
 	// Create scanner
-	scanner, err := osvscanner.New(cfg)
+	scanner, err := osvscanner.New(cfg, logger)
 	if err != nil {
-		log.Fatalf("Failed to create scanner: %v", err)
+		logger.Error("failed to create scanner", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 	defer scanner.Close()
 
@@ -38,14 +47,15 @@ func main() {
 
 	go func() {
 		<-sigChan
-		log.Println("Received shutdown signal, gracefully stopping...")
+		logger.Info("received shutdown signal, gracefully stopping")
 		cancel()
 	}()
 
 	// Start the scanner
 	if err := scanner.Start(ctx); err != nil {
-		log.Fatalf("Scanner failed: %v", err)
+		logger.Error("scanner failed", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
-	log.Println("Scanner-OSV stopped")
+	logger.Info("Scanner-OSV stopped")
 }

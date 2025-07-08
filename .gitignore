@@ -8,8 +8,7 @@ test-results/
 # Support files
 shared-repos/
 monitor
-heimdall-collector
-heimdall-cloner
-heimdall-scanner
-heimdall-cleaner
+heimdall-sync
+heimdall-scanner-trufflehog
+heimdall-scanner-osv
 heimdall-indexer

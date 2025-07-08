@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +14,9 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/klimeurt/heimdall/internal/collector"
+	"github.com/klimeurt/heimdall/internal/types"
 	"github.com/klimeurt/heimdall/internal/config"
+	"github.com/klimeurt/heimdall/internal/logging"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -24,6 +25,7 @@ type Scanner struct {
 	config      *config.ScannerConfig
 	redisClient RedisClient
 	auth        *http.BasicAuth
+	logger      *slog.Logger
 }
 
 // RedisClient interface for Redis operations (allows mocking in tests)
@@ -36,7 +38,7 @@ type RedisClient interface {
 }
 
 // New creates a new Scanner instance
-func New(cfg *config.ScannerConfig) (*Scanner, error) {
+func New(cfg *config.ScannerConfig, logger *slog.Logger) (*Scanner, error) {
 	// Create Redis client
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
@@ -68,6 +70,7 @@ func New(cfg *config.ScannerConfig) (*Scanner, error) {
 		config:      cfg,
 		redisClient: redisClient,
 		auth:        auth,
+		logger:      logger,
 	}, nil
 }
 
@@ -76,12 +79,15 @@ func (s *Scanner) Start(ctx context.Context) error {
 	// Log queue length at startup
 	queueLen, err := s.redisClient.LLen(ctx, s.config.ProcessedQueueName).Result()
 	if err != nil {
-		log.Printf("Failed to get queue length at startup: %v", err)
+		s.logger.Error("failed to get queue length at startup", slog.String("error", err.Error()))
 	} else {
-		log.Printf("Queue length at startup: %d items", queueLen)
+		s.logger.Info("queue length at startup",
+			slog.Int64("items", queueLen),
+			slog.String("queue", s.config.ProcessedQueueName))
 	}
 
-	log.Printf("Starting %d scanner workers", s.config.MaxConcurrentScans)
+	s.logger.Info("starting scanner workers",
+		slog.Int("worker_count", s.config.MaxConcurrentScans))
 
 	var wg sync.WaitGroup
 
@@ -96,14 +102,16 @@ func (s *Scanner) Start(ctx context.Context) error {
 
 	// Wait for all workers to complete
 	wg.Wait()
-	log.Println("All scanner workers have stopped")
+	s.logger.Info("all scanner workers have stopped")
 	return nil
 }
 
 // worker processes repository scan jobs from the Redis queue
 func (s *Scanner) worker(ctx context.Context, workerID int) {
-	log.Printf("Scanner Worker %d started", workerID)
-	defer log.Printf("Scanner Worker %d stopped", workerID)
+	ctx = logging.WithWorker(ctx, workerID)
+	logger := logging.LoggerFromContext(ctx, s.logger)
+	logger.Info("scanner worker started")
+	defer logger.Info("scanner worker stopped")
 
 	for {
 		select {
@@ -119,43 +127,52 @@ func (s *Scanner) worker(ctx context.Context, workerID int) {
 				if ctx.Err() != nil {
 					return // Context cancelled
 				}
-				log.Printf("Scanner Worker %d: Redis error: %v", workerID, err)
+				logger.Error("Redis error", slog.String("error", err.Error()))
 				continue
 			}
 
 			// result[0] is the queue name, result[1] is the data
 			if len(result) < 2 {
-				log.Printf("Scanner Worker %d: Invalid Redis result", workerID)
+				logger.Error("invalid Redis result")
 				continue
 			}
 
 			// Parse processed repository data
-			var processedRepo collector.ProcessedRepository
+			var processedRepo types.ProcessedRepository
 			if err := json.Unmarshal([]byte(result[1]), &processedRepo); err != nil {
-				log.Printf("Scanner Worker %d: Failed to parse processed repository data: %v", workerID, err)
+				logger.Error("failed to parse processed repository data", slog.String("error", err.Error()))
 				continue
 			}
 
 			// Scan the repository for secrets
 			if err := s.scanRepository(ctx, workerID, &processedRepo); err != nil {
-				log.Printf("Scanner Worker %d: Failed to scan repository %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, err)
+				logger.Error("failed to scan repository",
+					slog.String("org", processedRepo.Org),
+					slog.String("repo", processedRepo.Name),
+					slog.String("error", err.Error()))
 			}
 
 			// Log queue length after job execution
 			queueLen, err := s.redisClient.LLen(ctx, s.config.ProcessedQueueName).Result()
 			if err != nil {
-				log.Printf("Scanner Worker %d: Failed to get queue length after job: %v", workerID, err)
+				logger.Error("failed to get queue length after job", slog.String("error", err.Error()))
 			} else {
-				log.Printf("Scanner Worker %d: Queue length after job: %d items", workerID, queueLen)
+				logger.Debug("queue length after job",
+					slog.Int64("items", queueLen),
+					slog.String("queue", s.config.ProcessedQueueName))
 			}
 		}
 	}
 }
 
 // scanRepository scans a repository from shared volume with TruffleHog
-func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRepo *collector.ProcessedRepository) error {
+func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRepo *types.ProcessedRepository) error {
 	startTime := time.Now()
-	log.Printf("Scanner Worker %d: Scanning repository %s/%s", workerID, processedRepo.Org, processedRepo.Name)
+	logger := logging.LoggerFromContext(ctx, s.logger)
+	logger.Info("scanning repository",
+		slog.String("org", processedRepo.Org),
+		slog.String("repo", processedRepo.Name),
+		slog.String("path", processedRepo.ClonePath))
 
 	// Use the clone path from the processed repository
 	repoDir := processedRepo.ClonePath
@@ -163,8 +180,6 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 	// Validate that the path exists
 	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
 		err := fmt.Errorf("clone path does not exist: %s", repoDir)
-		// Still send coordination message even if path is missing
-		s.sendCoordinationMessage(ctx, workerID, processedRepo, "failed", startTime)
 		return s.handleScanError(ctx, workerID, processedRepo, startTime, err)
 	}
 
@@ -178,7 +193,7 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 	}
 
 	// Create scanned repository data
-	scannedRepo := &collector.ScannedRepository{
+	scannedRepo := &types.ScannedRepository{
 		Org:               processedRepo.Org,
 		Name:              processedRepo.Name,
 		ProcessedAt:       processedRepo.ProcessedAt,
@@ -205,19 +220,19 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 		return fmt.Errorf("failed to push scanned repository to queue: %w", err)
 	}
 
-	// Send coordination message
-	if err := s.sendCoordinationMessage(ctx, workerID, processedRepo, scannedRepo.ScanStatus, startTime); err != nil {
-		log.Printf("Scanner Worker %d: Failed to send coordination message for %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, err)
-	}
+	// Coordination message removed - no longer using coordinator service
 
-	log.Printf("Scanner Worker %d: Repository %s/%s scanned successfully - found %d valid secrets in %v",
-		workerID, processedRepo.Org, processedRepo.Name, len(findings), time.Since(startTime))
+	logger.Info("repository scanned successfully",
+		slog.String("org", processedRepo.Org),
+		slog.String("repo", processedRepo.Name),
+		slog.Int("valid_secrets_found", len(findings)),
+		slog.Int64("duration_ms", time.Since(startTime).Milliseconds()))
 
 	return nil
 }
 
 // runTruffleHogScan executes TruffleHog and parses results
-func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]collector.TruffleHogFinding, error) {
+func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]types.TruffleHogFinding, error) {
 	// Create temporary file for JSON output
 	outputFile := filepath.Join(repoDir, "trufflehog_results.json")
 	defer os.Remove(outputFile)
@@ -236,7 +251,11 @@ func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]coll
 	}
 
 	// Log the scan command for debugging
-	log.Printf("Running TruffleHog scan on all branches in: %s", repoDir)
+	logger := logging.LoggerFromContext(ctx, s.logger)
+	logger.Debug("running TruffleHog scan",
+		slog.String("path", repoDir),
+		slog.Int("concurrency", s.config.TruffleHogConcurrency),
+		slog.Bool("only_verified", s.config.TruffleHogOnlyVerified))
 
 	// Create command
 	cmd := exec.CommandContext(ctx, "trufflehog", args...)
@@ -253,7 +272,7 @@ func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]coll
 		if _, ok := err.(*exec.ExitError); ok {
 			// Log stderr for debugging
 			if stderrBuf.Len() > 0 {
-				log.Printf("TruffleHog stderr: %s", stderrBuf.String())
+				logger.Debug("TruffleHog stderr output", slog.String("stderr", stderrBuf.String()))
 			}
 			// Continue processing if it's just an exit error
 		} else {
@@ -263,7 +282,7 @@ func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]coll
 	}
 
 	// Parse JSON output line by line (TruffleHog outputs JSON lines)
-	var findings []collector.TruffleHogFinding
+	var findings []types.TruffleHogFinding
 	scanner := bufio.NewScanner(&stdoutBuf)
 
 	for scanner.Scan() {
@@ -274,12 +293,12 @@ func (s *Scanner) runTruffleHogScan(ctx context.Context, repoDir string) ([]coll
 
 		var result TruffleHogResult
 		if err := json.Unmarshal(line, &result); err != nil {
-			log.Printf("Failed to parse TruffleHog JSON line: %v", err)
+			logger.Debug("failed to parse TruffleHog JSON line", slog.String("error", err.Error()))
 			continue
 		}
 
 		// Convert to our finding format
-		finding := collector.TruffleHogFinding{
+		finding := types.TruffleHogFinding{
 			SecretType:  result.DetectorName,
 			Description: fmt.Sprintf("Found %s secret", result.DetectorName),
 			File:        result.SourceMetadata.Data.Git.File,
@@ -334,8 +353,12 @@ type TruffleHogResult struct {
 }
 
 // handleScanError creates a failed scan result and pushes it to the queue
-func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRepo *collector.ProcessedRepository, startTime time.Time, err error) error {
-	log.Printf("Scanner Worker %d: Error scanning %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, err)
+func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRepo *types.ProcessedRepository, startTime time.Time, err error) error {
+	logger := logging.LoggerFromContext(ctx, s.logger)
+	logger.Error("error scanning repository",
+		slog.String("org", processedRepo.Org),
+		slog.String("repo", processedRepo.Name),
+		slog.String("error", err.Error()))
 
 	status := "failed"
 	if ctx.Err() == context.DeadlineExceeded {
@@ -343,14 +366,14 @@ func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRe
 	}
 
 	// Create failed scan result
-	scannedRepo := &collector.ScannedRepository{
+	scannedRepo := &types.ScannedRepository{
 		Org:               processedRepo.Org,
 		Name:              processedRepo.Name,
 		ProcessedAt:       processedRepo.ProcessedAt,
 		ScannedAt:         time.Now(),
 		WorkerID:          workerID,
 		ValidSecretsFound: 0,
-		ValidSecrets:      []collector.TruffleHogFinding{},
+		ValidSecrets:      []types.TruffleHogFinding{},
 		ScanStatus:        status,
 		ScanDuration:      time.Since(startTime),
 		ErrorMessage:      err.Error(),
@@ -367,10 +390,7 @@ func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRe
 		return fmt.Errorf("failed to push failed scan to queue: %w", pushErr)
 	}
 
-	// Send coordination message even for failed scans
-	if coordErr := s.sendCoordinationMessage(ctx, workerID, processedRepo, status, startTime); coordErr != nil {
-		log.Printf("Scanner Worker %d: Failed to send coordination message for failed scan %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, coordErr)
-	}
+	// Coordination message removed - no longer using coordinator service
 
 	return err // Return original error
 }
@@ -403,32 +423,7 @@ func getBoolField(data map[string]interface{}, field string) bool {
 	return false
 }
 
-// sendCoordinationMessage sends a message to the coordinator when scanning is complete
-func (s *Scanner) sendCoordinationMessage(ctx context.Context, workerID int, processedRepo *collector.ProcessedRepository, status string, startTime time.Time) error {
-	coordMsg := &collector.ScanCoordinationMessage{
-		ClonePath:    processedRepo.ClonePath,
-		Org:          processedRepo.Org,
-		Name:         processedRepo.Name,
-		ScannerType:  "scanner-trufflehog",
-		CompletedAt:  time.Now(),
-		WorkerID:     workerID,
-		ScanStatus:   status,
-		ScanDuration: time.Since(startTime),
-	}
-
-	// Marshal to JSON
-	coordData, err := json.Marshal(coordMsg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal coordination message: %w", err)
-	}
-
-	// Push to coordinator queue
-	if err := s.redisClient.LPush(ctx, s.config.CoordinatorQueueName, coordData).Err(); err != nil {
-		return fmt.Errorf("failed to push coordination message to queue: %w", err)
-	}
-
-	return nil
-}
+// sendCoordinationMessage function removed - no longer using coordinator service
 
 // Close cleanly shuts down the scanner
 func (s *Scanner) Close() {

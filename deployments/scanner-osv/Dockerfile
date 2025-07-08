@@ -26,10 +26,10 @@ RUN apk add --no-cache \
     git \
     && rm -rf /var/cache/apk/*
 
-# Install scanner-osv
-RUN wget -O scanner-osv https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 && \
-    chmod +x scanner-osv && \
-    mv scanner-osv /usr/local/bin/
+# Install osv-scanner
+RUN wget -O osv-scanner https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 && \
+    chmod +x osv-scanner && \
+    mv osv-scanner /usr/local/bin/
 
 # Create non-root user
 RUN adduser -D -u 1000 scanner
@@ -39,6 +39,9 @@ COPY --from=builder /app/scanner-osv /usr/local/bin/heimdall-scanner-osv
 
 # Set ownership
 RUN chown -R scanner:scanner /usr/local/bin/heimdall-scanner-osv
+
+# Configure git to mark the shared directory as safe
+RUN git config --global --add safe.directory '*'
 
 # Switch to non-root user
 USER scanner

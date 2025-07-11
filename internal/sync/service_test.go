@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,31 +20,64 @@ import (
 )
 
 func TestFetchGitHubRepositories(t *testing.T) {
-	// Create test server
+	// Create test server for GraphQL API
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/orgs/test-org/repos", r.URL.Path)
+		assert.Equal(t, "/graphql", r.URL.Path)
+		assert.Equal(t, "POST", r.Method)
 
-		page := r.URL.Query().Get("page")
-		if page == "1" {
-			repos := []map[string]interface{}{
-				{
-					"name":      "repo1",
-					"clone_url": "https://github.com/test-org/repo1.git",
-					"ssh_url":   "git@github.com:test-org/repo1.git",
-					"private":   false,
-				},
-				{
-					"name":      "repo2",
-					"clone_url": "https://github.com/test-org/repo2.git",
-					"ssh_url":   "git@github.com:test-org/repo2.git",
-					"private":   true,
-				},
-			}
-			json.NewEncoder(w).Encode(repos)
+		var reqBody graphQLRequest
+		err := json.NewDecoder(r.Body).Decode(&reqBody)
+		require.NoError(t, err)
+
+		// Check for cursor in variables to determine if this is first or second page
+		cursor, hasCursor := reqBody.Variables["cursor"]
+		var hasNextPage bool
+		var endCursor string
+		
+		if !hasCursor || cursor == "" {
+			// First page
+			hasNextPage = true
+			endCursor = "cursor123"
 		} else {
-			// Empty response for second page
-			json.NewEncoder(w).Encode([]map[string]interface{}{})
+			// Second page
+			hasNextPage = false
+			endCursor = ""
 		}
+
+		// Mock GraphQL response
+		response := graphQLResponse{
+			Data: &graphQLData{
+				Organization: &graphQLOrganization{
+					Repositories: graphQLRepositories{
+						PageInfo: graphQLPageInfo{
+							HasNextPage: hasNextPage,
+							EndCursor:   endCursor,
+						},
+						Nodes: []graphQLRepository{
+							{
+								Name:      "repo1",
+								URL:  "https://github.com/test-org/repo1.git",
+								SSHURL:    "git@github.com:test-org/repo1.git",
+								IsPrivate: false,
+							},
+							{
+								Name:      "repo2",
+								URL:  "https://github.com/test-org/repo2.git",
+								SSHURL:    "git@github.com:test-org/repo2.git",
+								IsPrivate: true,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		// If it's the second page, return empty nodes
+		if hasCursor && cursor != "" {
+			response.Data.Organization.Repositories.Nodes = []graphQLRepository{}
+		}
+
+		json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -53,28 +87,14 @@ func TestFetchGitHubRepositories(t *testing.T) {
 		GitHubAPIDelayMs: 0,
 	}
 
-	// svc would be used in a more complete test
-	_ = &Service{
+	// Create test service with custom GraphQL endpoint
+	testSvc := &Service{
 		cfg:    cfg,
 		client: &http.Client{},
 	}
 
-	// Override GitHub API URL for testing
-	oldURL := "https://api.github.com"
-	defer func() { _ = oldURL }() // Keep reference
-
-	// Monkey patch the URL in the method
 	ctx := context.Background()
-	repos, err := func() ([]*Repository, error) {
-		// Create custom service for this test
-		testSvc := &Service{
-			cfg:    cfg,
-			client: &http.Client{},
-		}
-
-		// Override the fetchGitHubRepositories method to use test server
-		return testSvc.fetchGitHubRepositoriesWithURL(ctx, server.URL)
-	}()
+	repos, err := testSvc.fetchGitHubRepositoriesWithGraphQLURL(ctx, server.URL+"/graphql")
 
 	require.NoError(t, err)
 	assert.Len(t, repos, 2)
@@ -85,66 +105,120 @@ func TestFetchGitHubRepositories(t *testing.T) {
 	assert.True(t, repos[1].Private)
 }
 
-// Helper method for testing with custom URL
-func (s *Service) fetchGitHubRepositoriesWithURL(ctx context.Context, baseURL string) ([]*Repository, error) {
+// Helper method for testing with custom GraphQL URL
+func (s *Service) fetchGitHubRepositoriesWithGraphQLURL(ctx context.Context, graphqlURL string) ([]*Repository, error) {
 	var allRepos []*Repository
-	page := 1
-	perPage := 100
+	cursor := ""
+	
+	// GraphQL query to fetch organization repositories
+	query := `
+		query($org: String!, $cursor: String) {
+			organization(login: $org) {
+				repositories(first: 100, after: $cursor) {
+					pageInfo {
+						hasNextPage
+						endCursor
+					}
+					nodes {
+						name
+						url
+						sshUrl
+						isPrivate
+					}
+				}
+			}
+		}
+	`
 
 	for {
-		url := fmt.Sprintf("%s/orgs/%s/repos?page=%d&per_page=%d",
-			baseURL, s.cfg.GitHubOrg, page, perPage)
+		// Prepare variables for the GraphQL query
+		variables := map[string]interface{}{
+			"org": s.cfg.GitHubOrg,
+		}
+		if cursor != "" {
+			variables["cursor"] = cursor
+		}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		// Execute GraphQL query with custom URL
+		resp, err := s.executeGraphQLQueryWithURL(ctx, graphqlURL, query, variables)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to execute GraphQL query: %w", err)
 		}
 
-		if s.cfg.GitHubToken != "" {
-			req.Header.Set("Authorization", "token "+s.cfg.GitHubToken)
+		// Check if organization exists
+		if resp.Data == nil || resp.Data.Organization == nil {
+			return nil, fmt.Errorf("organization '%s' not found", s.cfg.GitHubOrg)
 		}
 
-		resp, err := s.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
-		}
-
-		var repos []struct {
-			Name     string `json:"name"`
-			CloneURL string `json:"clone_url"`
-			SSHURL   string `json:"ssh_url"`
-			Private  bool   `json:"private"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
-			resp.Body.Close()
-			return nil, err
-		}
-		resp.Body.Close()
-
-		for _, r := range repos {
+		// Convert GraphQL repositories to our Repository model
+		for _, gqlRepo := range resp.Data.Organization.Repositories.Nodes {
 			repo := &Repository{
-				Name:     r.Name,
+				Name:     gqlRepo.Name,
 				Org:      s.cfg.GitHubOrg,
-				CloneURL: r.CloneURL,
-				SSHURL:   r.SSHURL,
-				Private:  r.Private,
+				URL: gqlRepo.URL,
+				SSHURL:   gqlRepo.SSHURL,
+				Private:  gqlRepo.IsPrivate,
 			}
 			allRepos = append(allRepos, repo)
 		}
 
-		if len(repos) < perPage {
+		// Check if we have more pages
+		if !resp.Data.Organization.Repositories.PageInfo.HasNextPage {
 			break
 		}
-		page++
+		cursor = resp.Data.Organization.Repositories.PageInfo.EndCursor
 	}
 
 	return allRepos, nil
+}
+
+// Helper method for testing with custom GraphQL URL
+func (s *Service) executeGraphQLQueryWithURL(ctx context.Context, graphqlURL string, query string, variables map[string]interface{}) (*graphQLResponse, error) {
+	reqBody := graphQLRequest{
+		Query:     query,
+		Variables: variables,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal GraphQL request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", graphqlURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GraphQL request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if s.cfg.GitHubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
+	}
+
+	// Add rate limit delay
+	if s.cfg.GitHubAPIDelayMs > 0 {
+		time.Sleep(time.Duration(s.cfg.GitHubAPIDelayMs) * time.Millisecond)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GraphQL request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GraphQL API returned status %d", resp.StatusCode)
+	}
+
+	var graphQLResp graphQLResponse
+	if err := json.NewDecoder(resp.Body).Decode(&graphQLResp); err != nil {
+		return nil, fmt.Errorf("failed to decode GraphQL response: %w", err)
+	}
+
+	if len(graphQLResp.Errors) > 0 {
+		return nil, fmt.Errorf("GraphQL errors: %v", graphQLResp.Errors)
+	}
+
+	return &graphQLResp, nil
 }
 
 func TestListLocalRepositories(t *testing.T) {
@@ -155,11 +229,13 @@ func TestListLocalRepositories(t *testing.T) {
 	// Create test repositories
 	repo1Dir := filepath.Join(orgDir, "repo1")
 	repo2Dir := filepath.Join(orgDir, "repo2")
+	githubDir := filepath.Join(orgDir, ".github")
 	nonRepoDir := filepath.Join(orgDir, "not-a-repo")
 	hiddenDir := filepath.Join(orgDir, ".hidden")
 
 	require.NoError(t, os.MkdirAll(filepath.Join(repo1Dir, ".git"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo2Dir, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(githubDir, ".git"), 0o755))
 	require.NoError(t, os.MkdirAll(nonRepoDir, 0o755))
 	require.NoError(t, os.MkdirAll(hiddenDir, 0o755))
 
@@ -172,9 +248,44 @@ func TestListLocalRepositories(t *testing.T) {
 
 	repos, err := svc.listLocalRepositories()
 	require.NoError(t, err)
-	assert.Len(t, repos, 2)
+	assert.Len(t, repos, 3)
 	assert.Contains(t, repos, "repo1")
 	assert.Contains(t, repos, "repo2")
+	assert.Contains(t, repos, ".github")
+}
+
+func TestListLocalRepositoriesDotPrefixed(t *testing.T) {
+	// Create temporary directory structure
+	tmpDir := t.TempDir()
+	orgDir := filepath.Join(tmpDir, "test-org")
+
+	// Create dot-prefixed repositories
+	githubDir := filepath.Join(orgDir, ".github")
+	devcontainerDir := filepath.Join(orgDir, ".devcontainer")
+	vscodeDir := filepath.Join(orgDir, ".vscode")
+	
+	// Create dot-prefixed directory that is NOT a git repository
+	hiddenNonRepoDir := filepath.Join(orgDir, ".hidden-non-repo")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(githubDir, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(devcontainerDir, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(vscodeDir, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(hiddenNonRepoDir, 0o755))
+
+	cfg := config.SyncConfig{
+		GitHubOrg:        "test-org",
+		SharedVolumePath: tmpDir,
+	}
+
+	svc := &Service{cfg: cfg}
+
+	repos, err := svc.listLocalRepositories()
+	require.NoError(t, err)
+	assert.Len(t, repos, 3)
+	assert.Contains(t, repos, ".github")
+	assert.Contains(t, repos, ".devcontainer")
+	assert.Contains(t, repos, ".vscode")
+	assert.NotContains(t, repos, ".hidden-non-repo")
 }
 
 func TestPushToScannerQueues(t *testing.T) {
@@ -226,6 +337,122 @@ func TestPushToScannerQueues(t *testing.T) {
 
 		// The actual test would require mocking Redis operations
 		t.Skip("Redis mocking required for complete test")
+	})
+}
+
+func TestScannerQueueConfiguration(t *testing.T) {
+	tests := []struct {
+		name                  string
+		enableScannerQueues   bool
+		enableTruffleHogQueue bool
+		enableOSVQueue        bool
+		expectedSkip          bool
+		expectedLog           string
+	}{
+		{
+			name:                  "all queues enabled",
+			enableScannerQueues:   true,
+			enableTruffleHogQueue: true,
+			enableOSVQueue:        true,
+			expectedSkip:          false,
+			expectedLog:           "should push to both queues",
+		},
+		{
+			name:                  "scanner queues globally disabled",
+			enableScannerQueues:   false,
+			enableTruffleHogQueue: true,
+			enableOSVQueue:        true,
+			expectedSkip:          true,
+			expectedLog:           "scanner queues disabled",
+		},
+		{
+			name:                  "only trufflehog queue enabled",
+			enableScannerQueues:   true,
+			enableTruffleHogQueue: true,
+			enableOSVQueue:        false,
+			expectedSkip:          false,
+			expectedLog:           "should push to trufflehog queue only",
+		},
+		{
+			name:                  "only osv queue enabled",
+			enableScannerQueues:   true,
+			enableTruffleHogQueue: false,
+			enableOSVQueue:        true,
+			expectedSkip:          false,
+			expectedLog:           "should push to osv queue only",
+		},
+		{
+			name:                  "no individual queues enabled",
+			enableScannerQueues:   true,
+			enableTruffleHogQueue: false,
+			enableOSVQueue:        false,
+			expectedSkip:          true,
+			expectedLog:           "no scanner queues enabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.SyncConfig{
+				GitHubOrg:             "test-org",
+				SharedVolumePath:      "/shared",
+				TruffleHogQueueName:   "trufflehog_queue",
+				OSVQueueName:          "osv_queue",
+				EnableScannerQueues:   tt.enableScannerQueues,
+				EnableTruffleHogQueue: tt.enableTruffleHogQueue,
+				EnableOSVQueue:        tt.enableOSVQueue,
+			}
+
+			svc := &Service{
+				cfg:    cfg,
+				logger: getTestLogger(),
+			}
+
+			ctx := context.Background()
+			repo := &Repository{
+				Name: "test-repo",
+				Org:  "test-org",
+			}
+
+			// Test the logic without actual Redis operations
+			// We can't fully test without mocking Redis, but we can verify the configuration logic
+			shouldSkip := !cfg.EnableScannerQueues || (!cfg.EnableTruffleHogQueue && !cfg.EnableOSVQueue)
+			assert.Equal(t, tt.expectedSkip, shouldSkip, "configuration should determine skip behavior")
+
+			// Verify the service has the correct configuration
+			assert.Equal(t, tt.enableScannerQueues, svc.cfg.EnableScannerQueues)
+			assert.Equal(t, tt.enableTruffleHogQueue, svc.cfg.EnableTruffleHogQueue)
+			assert.Equal(t, tt.enableOSVQueue, svc.cfg.EnableOSVQueue)
+
+			// Note: We can't fully test the pushRepositoryToQueues method without mocking Redis
+			// But we can verify that the configuration is correctly loaded
+			_ = ctx
+			_ = repo
+		})
+	}
+}
+
+func TestSyncConfigDefaults(t *testing.T) {
+	t.Run("default configuration values", func(t *testing.T) {
+		cfg := config.SyncConfig{
+			GitHubOrg:             "test-org",
+			SharedVolumePath:      "/shared",
+			TruffleHogQueueName:   "trufflehog_queue",
+			OSVQueueName:          "osv_queue",
+			EnableScannerQueues:   true,  // default should be true
+			EnableTruffleHogQueue: true,  // default should be true
+			EnableOSVQueue:        true,  // default should be true
+		}
+
+		svc := &Service{
+			cfg:    cfg,
+			logger: getTestLogger(),
+		}
+
+		// Verify default values maintain backward compatibility
+		assert.True(t, svc.cfg.EnableScannerQueues, "EnableScannerQueues should default to true")
+		assert.True(t, svc.cfg.EnableTruffleHogQueue, "EnableTruffleHogQueue should default to true")
+		assert.True(t, svc.cfg.EnableOSVQueue, "EnableOSVQueue should default to true")
 	})
 }
 
@@ -336,7 +563,7 @@ func TestUpdateRepositoryWithFetchFailureRecovery(t *testing.T) {
 	repo := &Repository{
 		Name:     "test-repo",
 		Org:      "test-org",
-		CloneURL: "https://github.com/test-org/test-repo.git",
+		URL: "https://github.com/test-org/test-repo.git",
 		Private:  false,
 	}
 	

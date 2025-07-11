@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -114,6 +114,7 @@ func (s *Service) SyncOrganization(ctx context.Context) error {
 
 	// Step 5: Execute sync operations
 	syncErrors := 0
+	skippedCount := 0
 
 	// Clone new repositories
 	if len(toClone) > 0 {
@@ -123,8 +124,9 @@ func (s *Service) SyncOrganization(ctx context.Context) error {
 
 	// Update existing repositories
 	if len(toUpdate) > 0 {
-		errors := s.updateRepositories(ctx, toUpdate)
+		errors, skipped := s.updateRepositories(ctx, toUpdate)
 		syncErrors += errors
+		skippedCount += skipped
 	}
 
 	// Remove orphaned repositories
@@ -143,11 +145,13 @@ func (s *Service) SyncOrganization(ctx context.Context) error {
 	// }
 
 	duration := time.Since(startTime)
+	actuallyUpdated := len(toUpdate) - skippedCount
 	logger.Info("organization sync completed",
 		slog.Int64("duration_ms", duration.Milliseconds()),
 		slog.Int("errors", syncErrors),
 		slog.Int("cloned", len(toClone)),
-		slog.Int("updated", len(toUpdate)),
+		slog.Int("updated", actuallyUpdated),
+		slog.Int("skipped", skippedCount),
 		slog.Int("removed", len(toRemove)))
 
 	if syncErrors > 0 {
@@ -157,72 +161,117 @@ func (s *Service) SyncOrganization(ctx context.Context) error {
 	return nil
 }
 
-// fetchGitHubRepositories fetches all repositories from the GitHub organization
+// executeGraphQLQuery executes a GraphQL query against GitHub API
+func (s *Service) executeGraphQLQuery(ctx context.Context, query string, variables map[string]interface{}) (*graphQLResponse, error) {
+	reqBody := graphQLRequest{
+		Query:     query,
+		Variables: variables,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal GraphQL request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.github.com/graphql", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GraphQL request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if s.cfg.GitHubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.cfg.GitHubToken)
+	}
+
+	// Add rate limit delay
+	if s.cfg.GitHubAPIDelayMs > 0 {
+		time.Sleep(time.Duration(s.cfg.GitHubAPIDelayMs) * time.Millisecond)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GraphQL request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GraphQL API returned status %d", resp.StatusCode)
+	}
+
+	var graphQLResp graphQLResponse
+	if err := json.NewDecoder(resp.Body).Decode(&graphQLResp); err != nil {
+		return nil, fmt.Errorf("failed to decode GraphQL response: %w", err)
+	}
+
+	if len(graphQLResp.Errors) > 0 {
+		return nil, fmt.Errorf("GraphQL errors: %v", graphQLResp.Errors)
+	}
+
+	return &graphQLResp, nil
+}
+
+// fetchGitHubRepositories fetches all repositories from the GitHub organization using GraphQL
 func (s *Service) fetchGitHubRepositories(ctx context.Context) ([]*Repository, error) {
 	var allRepos []*Repository
-	page := 1
-	perPage := 100
+	cursor := ""
+	
+	// GraphQL query to fetch organization repositories
+	query := `
+		query($org: String!, $cursor: String) {
+			organization(login: $org) {
+				repositories(first: 100, after: $cursor) {
+					pageInfo {
+						hasNextPage
+						endCursor
+					}
+					nodes {
+						name
+						url
+						sshUrl
+						isPrivate
+					}
+				}
+			}
+		}
+	`
 
 	for {
-		// Build request URL
-		url := fmt.Sprintf("https://api.github.com/orgs/%s/repos?page=%d&per_page=%d", 
-			s.cfg.GitHubOrg, page, perPage)
+		// Prepare variables for the GraphQL query
+		variables := map[string]interface{}{
+			"org": s.cfg.GitHubOrg,
+		}
+		if cursor != "" {
+			variables["cursor"] = cursor
+		}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		// Execute GraphQL query
+		resp, err := s.executeGraphQLQuery(ctx, query, variables)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to execute GraphQL query: %w", err)
 		}
 
-		// Add authentication if token is provided
-		if s.cfg.GitHubToken != "" {
-			req.Header.Set("Authorization", "token "+s.cfg.GitHubToken)
+		// Check if organization exists
+		if resp.Data == nil || resp.Data.Organization == nil {
+			return nil, fmt.Errorf("organization '%s' not found", s.cfg.GitHubOrg)
 		}
 
-		// Add rate limit delay
-		if s.cfg.GitHubAPIDelayMs > 0 {
-			time.Sleep(time.Duration(s.cfg.GitHubAPIDelayMs) * time.Millisecond)
-		}
-
-		resp, err := s.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
-		}
-
-		var repos []struct {
-			Name     string `json:"name"`
-			CloneURL string `json:"clone_url"`
-			SSHURL   string `json:"ssh_url"`
-			Private  bool   `json:"private"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
-			resp.Body.Close()
-			return nil, err
-		}
-		resp.Body.Close()
-
-		// Convert to our Repository model
-		for _, r := range repos {
+		// Convert GraphQL repositories to our Repository model
+		for _, gqlRepo := range resp.Data.Organization.Repositories.Nodes {
 			repo := &Repository{
-				Name:     r.Name,
+				Name:     gqlRepo.Name,
 				Org:      s.cfg.GitHubOrg,
-				CloneURL: r.CloneURL,
-				SSHURL:   r.SSHURL,
-				Private:  r.Private,
+				URL:      gqlRepo.URL,
+				SSHURL:   gqlRepo.SSHURL,
+				Private:  gqlRepo.IsPrivate,
 			}
 			allRepos = append(allRepos, repo)
 		}
 
 		// Check if we have more pages
-		if len(repos) < perPage {
+		if !resp.Data.Organization.Repositories.PageInfo.HasNextPage {
 			break
 		}
-		page++
+		cursor = resp.Data.Organization.Repositories.PageInfo.EndCursor
 	}
 
 	return allRepos, nil
@@ -245,7 +294,7 @@ func (s *Service) listLocalRepositories() ([]string, error) {
 
 	var repos []string
 	for _, entry := range entries {
-		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+		if entry.IsDir() {
 			// Check if it's a git repository
 			gitDir := filepath.Join(orgPath, entry.Name(), ".git")
 			if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
@@ -286,10 +335,12 @@ func (s *Service) cloneRepositories(ctx context.Context, repos []*Repository) in
 }
 
 // updateRepositories updates existing repositories
-func (s *Service) updateRepositories(ctx context.Context, repos []*Repository) int {
+func (s *Service) updateRepositories(ctx context.Context, repos []*Repository) (int, int) {
 	errors := 0
+	skipped := 0
 	sem := make(chan struct{}, s.cfg.MaxConcurrentSyncs)
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 
 	for _, repo := range repos {
 		wg.Add(1)
@@ -299,18 +350,51 @@ func (s *Service) updateRepositories(ctx context.Context, repos []*Repository) i
 			defer wg.Done()
 			defer func() { <-sem }() // Release semaphore
 
+			// Check if repository needs update
+			needsUpdate, err := s.repositoryNeedsUpdate(ctx, r)
+			if err != nil {
+				s.logger.Warn("failed to check if repository needs update, will perform full update",
+					slog.String("org", r.Org),
+					slog.String("repo", r.Name),
+					slog.String("error", err.Error()))
+				needsUpdate = true // Fallback to updating on error
+			}
+
+			if !needsUpdate {
+				s.logger.Info("repository is up to date, skipping update",
+					slog.String("org", r.Org),
+					slog.String("repo", r.Name))
+				
+				// Even if we skip the git update, we still need to push to scanner queues
+				// This ensures repositories are still processed by scanners even if unchanged
+				if err := s.pushRepositoryToQueues(ctx, r); err != nil {
+					s.logger.Warn("failed to push repository to queues",
+						slog.String("org", r.Org),
+						slog.String("repo", r.Name),
+						slog.String("error", err.Error()))
+				}
+				
+				mu.Lock()
+				skipped++
+				mu.Unlock()
+				return
+			}
+
+			// Repository needs update, proceed with normal update
 			if err := s.updateRepository(ctx, r); err != nil {
 				s.logger.Error("failed to update repository",
 					slog.String("org", r.Org),
 					slog.String("repo", r.Name),
 					slog.String("error", err.Error()))
+				mu.Lock()
 				errors++
+				mu.Unlock()
 			}
 		}(repo)
 	}
 
 	wg.Wait()
-	return errors
+	return errors, skipped
 }
 
 // removeRepositories removes orphaned repositories
@@ -330,10 +414,32 @@ func (s *Service) removeRepositories(ctx context.Context, repoNames []string) in
 
 // pushToScannerQueues pushes repositories to scanner queues
 func (s *Service) pushToScannerQueues(ctx context.Context, repos []*Repository) error {
+	// Check if scanner queues are globally disabled
+	if !s.cfg.EnableScannerQueues {
+		s.logger.Debug("scanner queues disabled, skipping batch repository push",
+			slog.Int("count", len(repos)))
+		return nil
+	}
+
+	// Check if any queues are enabled
+	if !s.cfg.EnableTruffleHogQueue && !s.cfg.EnableOSVQueue {
+		s.logger.Debug("no scanner queues enabled, skipping batch repository push",
+			slog.Int("count", len(repos)))
+		return nil
+	}
+
 	// Process in batches
 	batchSize := s.cfg.QueueBatchSize
 	if batchSize <= 0 {
 		batchSize = 10
+	}
+
+	pushedQueues := []string{}
+	if s.cfg.EnableTruffleHogQueue {
+		pushedQueues = append(pushedQueues, s.cfg.TruffleHogQueueName)
+	}
+	if s.cfg.EnableOSVQueue {
+		pushedQueues = append(pushedQueues, s.cfg.OSVQueueName)
 	}
 
 	for i := 0; i < len(repos); i += batchSize {
@@ -359,9 +465,13 @@ func (s *Service) pushToScannerQueues(ctx context.Context, repos []*Repository) 
 				return fmt.Errorf("failed to marshal repository %s: %w", repo.Name, err)
 			}
 
-			// Push to both scanner queues
-			pipe.LPush(ctx, s.cfg.TruffleHogQueueName, data)
-			pipe.LPush(ctx, s.cfg.OSVQueueName, data)
+			// Push to enabled scanner queues
+			if s.cfg.EnableTruffleHogQueue {
+				pipe.LPush(ctx, s.cfg.TruffleHogQueueName, data)
+			}
+			if s.cfg.EnableOSVQueue {
+				pipe.LPush(ctx, s.cfg.OSVQueueName, data)
+			}
 		}
 
 		if _, err := pipe.Exec(ctx); err != nil {
@@ -371,8 +481,7 @@ func (s *Service) pushToScannerQueues(ctx context.Context, repos []*Repository) 
 
 	s.logger.Info("pushed repositories to scanner queues",
 		slog.Int("count", len(repos)),
-		slog.String("trufflehog_queue", s.cfg.TruffleHogQueueName),
-		slog.String("osv_queue", s.cfg.OSVQueueName))
+		slog.Any("queues", pushedQueues))
 	return nil
 }
 
@@ -380,13 +489,62 @@ func (s *Service) pushToScannerQueues(ctx context.Context, repos []*Repository) 
 type Repository struct {
 	Name     string
 	Org      string
-	CloneURL string
+	URL string
 	SSHURL   string
 	Private  bool
 }
 
+// GraphQL types for GitHub API
+type graphQLRequest struct {
+	Query     string                 `json:"query"`
+	Variables map[string]interface{} `json:"variables"`
+}
+
+type graphQLResponse struct {
+	Data   *graphQLData    `json:"data"`
+	Errors []graphQLError  `json:"errors"`
+}
+
+type graphQLData struct {
+	Organization *graphQLOrganization `json:"organization"`
+}
+
+type graphQLOrganization struct {
+	Repositories graphQLRepositories `json:"repositories"`
+}
+
+type graphQLRepositories struct {
+	PageInfo graphQLPageInfo       `json:"pageInfo"`
+	Nodes    []graphQLRepository   `json:"nodes"`
+}
+
+type graphQLPageInfo struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
+}
+
+type graphQLRepository struct {
+	Name      string `json:"name"`
+	URL  string `json:"url"`
+	SSHURL    string `json:"sshUrl"`
+	IsPrivate bool   `json:"isPrivate"`
+}
+
+type graphQLError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+}
+
 // pushRepositoryToQueues pushes a single repository to scanner queues
 func (s *Service) pushRepositoryToQueues(ctx context.Context, repo *Repository) error {
+	// Check if scanner queues are globally disabled
+	if !s.cfg.EnableScannerQueues {
+		s.logger.Debug("scanner queues disabled, skipping repository push",
+			slog.String("org", repo.Org),
+			slog.String("repo", repo.Name))
+		return nil
+	}
+
 	// Create ProcessedRepository with the new path structure
 	processed := types.ProcessedRepository{
 		Org:         repo.Org,
@@ -400,10 +558,27 @@ func (s *Service) pushRepositoryToQueues(ctx context.Context, repo *Repository) 
 		return fmt.Errorf("failed to marshal repository %s: %w", repo.Name, err)
 	}
 
-	// Push to both scanner queues using a pipeline for atomicity
+	// Push to scanner queues based on individual queue configuration
 	pipe := s.rdb.Pipeline()
-	pipe.LPush(ctx, s.cfg.TruffleHogQueueName, data)
-	pipe.LPush(ctx, s.cfg.OSVQueueName, data)
+	pushedQueues := []string{}
+
+	if s.cfg.EnableTruffleHogQueue {
+		pipe.LPush(ctx, s.cfg.TruffleHogQueueName, data)
+		pushedQueues = append(pushedQueues, s.cfg.TruffleHogQueueName)
+	}
+
+	if s.cfg.EnableOSVQueue {
+		pipe.LPush(ctx, s.cfg.OSVQueueName, data)
+		pushedQueues = append(pushedQueues, s.cfg.OSVQueueName)
+	}
+
+	// If no queues are enabled, skip execution
+	if len(pushedQueues) == 0 {
+		s.logger.Debug("no scanner queues enabled, skipping repository push",
+			slog.String("org", repo.Org),
+			slog.String("repo", repo.Name))
+		return nil
+	}
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to push repository to queues: %w", err)
@@ -412,8 +587,7 @@ func (s *Service) pushRepositoryToQueues(ctx context.Context, repo *Repository) 
 	s.logger.Info("pushed repository to scanner queues",
 		slog.String("org", repo.Org),
 		slog.String("repo", repo.Name),
-		slog.String("trufflehog_queue", s.cfg.TruffleHogQueueName),
-		slog.String("osv_queue", s.cfg.OSVQueueName))
+		slog.Any("queues", pushedQueues))
 	return nil
 }
 

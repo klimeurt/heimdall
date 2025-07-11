@@ -6,8 +6,7 @@ coverage.html
 test-results/
 
 # Support files
-shared-repos/
-monitor
+heimdall-monitor
 heimdall-sync
 heimdall-scanner-trufflehog
 heimdall-scanner-osv

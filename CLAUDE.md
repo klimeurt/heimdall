@@ -82,6 +82,13 @@ make run-indexer       # or go run ./cmd/indexer
 
 # Monitor queues and disk space
 make run-monitor    # or go run ./cmd/monitor
+
+# Run sync service only (no scanner queues)
+ENABLE_SCANNER_QUEUES=false make run-sync
+
+# Run sync + specific scanners only
+ENABLE_OSV_QUEUE=false make run-sync           # Only TruffleHog scanner
+ENABLE_TRUFFLEHOG_QUEUE=false make run-sync    # Only OSV scanner
 ```
 
 ### Docker Compose
@@ -93,6 +100,15 @@ export GITHUB_TOKEN=your-github-token  # Optional for public repos
 # Start all services with dependencies (Redis, Elasticsearch, Kibana)
 docker-compose up -d
 
+# Run sync service only (no scanners)
+ENABLE_SCANNER_QUEUES=false docker-compose up -d sync redis init-volume
+
+# Run sync + only TruffleHog scanner  
+ENABLE_OSV_QUEUE=false docker-compose up -d sync scanner-trufflehog redis init-volume
+
+# Run sync + only OSV scanner
+ENABLE_TRUFFLEHOG_QUEUE=false docker-compose up -d sync scanner-osv redis init-volume
+
 # View logs
 docker-compose logs -f sync
 docker-compose logs -f scanner-trufflehog
@@ -103,6 +119,29 @@ docker-compose down
 
 # View Kibana dashboards (after startup)
 # http://localhost:5601
+```
+
+### Scanner Queue Configuration
+The sync service can optionally push repositories to scanner queues. By default, all queues are enabled for backward compatibility.
+
+**Environment Variables:**
+- `ENABLE_SCANNER_QUEUES` - Global toggle to enable/disable all scanner queue pushes (default: true)
+- `ENABLE_TRUFFLEHOG_QUEUE` - Individual control for TruffleHog queue (default: true)
+- `ENABLE_OSV_QUEUE` - Individual control for OSV queue (default: true)
+
+**Usage Examples:**
+```bash
+# Sync only (no scanners)
+ENABLE_SCANNER_QUEUES=false
+
+# Sync + TruffleHog scanner only
+ENABLE_OSV_QUEUE=false
+
+# Sync + OSV scanner only  
+ENABLE_TRUFFLEHOG_QUEUE=false
+
+# All scanners (default behavior)
+# No additional configuration needed
 ```
 
 ### Code Quality
@@ -169,10 +208,15 @@ All processing services use concurrent worker pools:
 - Graceful shutdown handling with context cancellation
 
 ### Queue Message Flow
-1. Sync → `trufflehog_queue` & `osv_queue`: Pushes all repositories after synchronization
+1. Sync → `trufflehog_queue` & `osv_queue`: Conditionally pushes repositories based on scanner queue configuration
 2. Scanner-TruffleHog → `trufflehog_results_queue`: Adds scan results with validated secrets
 3. Scanner-OSV → `osv_results_queue`: Adds vulnerability findings
 4. Indexer: Consumes from `trufflehog_results_queue` & `osv_results_queue` → Elasticsearch
+
+**Scanner Queue Configuration:**
+- Sync service can run independently without pushing to scanner queues
+- Individual scanner queues can be enabled/disabled independently
+- Default behavior maintains backward compatibility (all queues enabled)
 
 ### Error Handling
 - Services log errors but continue processing other items
@@ -230,3 +274,23 @@ All processing services use concurrent worker pools:
 - Images pushed to GitHub Container Registry (`ghcr.io/klimeurt`)
 - Version automatically embedded from git tags
 - Services: sync, scanner-trufflehog, scanner-osv, indexer
+
+## Service Dependencies and Optional Components
+
+### Core Components
+- **Sync Service**: The primary service that maintains repository mirrors. Can run independently.
+- **Redis**: Required by all services for queue communication and coordination.
+
+### Optional Scanner Components
+- **Scanner-TruffleHog**: Secret scanning service. Only runs if `ENABLE_TRUFFLEHOG_QUEUE=true` in sync service.
+- **Scanner-OSV**: Vulnerability scanning service. Only runs if `ENABLE_OSV_QUEUE=true` in sync service.
+- **Indexer**: Elasticsearch indexing service. Only needed if scanner results need to be stored/visualized.
+
+### Optional Visualization Components
+- **Elasticsearch**: Required only if using the indexer service for storing scan results.
+- **Kibana**: Optional dashboard for visualizing scan results stored in Elasticsearch.
+
+This architecture allows you to run only the components you need:
+- **Sync Only**: Just maintain repository mirrors without scanning
+- **Sync + Single Scanner**: Run only one type of scanner (secrets OR vulnerabilities)
+- **Full Pipeline**: Run all components for complete security analysis and visualization

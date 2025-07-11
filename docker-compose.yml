@@ -3,7 +3,7 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: /tmp/shared-repos
+      device: ~/git
   elasticsearch-data:
 
 services:
@@ -53,7 +53,7 @@ services:
   init-volume:
     image: alpine:latest
     volumes:
-      - /tmp/shared-repos:/shared/heimdall-repos
+      - ~/git:/shared/heimdall-repos
     command: |
       sh -c "
         mkdir -p /shared/heimdall-repos &&
@@ -66,20 +66,24 @@ services:
       context: .
       dockerfile: deployments/sync/Dockerfile
     volumes:
-      - /tmp/shared-repos:/shared/heimdall-repos
+      - ~/git:/shared/heimdall-repos
     environment:
       - GITHUB_ORG=${GITHUB_ORG}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - REDIS_URL=redis://redis:6379
       - FETCH_ON_STARTUP=true
       - FETCH_SCHEDULE=${FETCH_SCHEDULE:-0 0 * * 0}
-      - MAX_CONCURRENT_SYNCS=3
+      - MAX_CONCURRENT_SYNCS=10
       - SYNC_TIMEOUT_MINUTES=30
       - SHARED_VOLUME_PATH=/shared/heimdall-repos
       - TRUFFLEHOG_QUEUE_NAME=trufflehog_queue
       - OSV_QUEUE_NAME=osv_queue
       - GITHUB_API_DELAY_MS=100
       - QUEUE_BATCH_SIZE=10
+      # Scanner queue configuration
+      - ENABLE_SCANNER_QUEUES=${ENABLE_SCANNER_QUEUES:-true}
+      - ENABLE_TRUFFLEHOG_QUEUE=${ENABLE_TRUFFLEHOG_QUEUE:-true}
+      - ENABLE_OSV_QUEUE=${ENABLE_OSV_QUEUE:-true}
       # Logging configuration
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LOG_FORMAT=${LOG_FORMAT:-json}
@@ -95,7 +99,7 @@ services:
       context: .
       dockerfile: deployments/scanner-trufflehog/Dockerfile
     volumes:
-      - /tmp/shared-repos:/shared/heimdall-repos
+      - ~/git:/shared/heimdall-repos
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -121,7 +125,7 @@ services:
       context: .
       dockerfile: deployments/scanner-osv/Dockerfile
     volumes:
-      - /tmp/shared-repos:/shared/heimdall-repos
+      - ~/git:/shared/heimdall-repos
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379

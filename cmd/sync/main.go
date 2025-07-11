@@ -24,18 +24,21 @@ func main() {
 	slog.SetDefault(logger)
 
 	cfg := config.SyncConfig{
-		RedisURL:             getEnv("REDIS_URL", "redis://localhost:6379"),
-		GitHubOrg:            os.Getenv("GITHUB_ORG"),
-		GitHubToken:          os.Getenv("GITHUB_TOKEN"),
-		FetchSchedule:        getEnv("FETCH_SCHEDULE", "0 0 * * 0"), // Weekly on Sunday
-		FetchOnStartup:       getEnvBool("FETCH_ON_STARTUP", true),
-		MaxConcurrentSyncs:   getEnvInt("MAX_CONCURRENT_SYNCS", 3),
-		SyncTimeoutMinutes:   getEnvInt("SYNC_TIMEOUT_MINUTES", 30),
-		SharedVolumePath:     getEnv("SHARED_VOLUME_PATH", "/shared/heimdall-repos"),
-		TruffleHogQueueName:  getEnv("TRUFFLEHOG_QUEUE_NAME", "trufflehog_queue"),
-		OSVQueueName:         getEnv("OSV_QUEUE_NAME", "osv_queue"),
-		GitHubAPIDelayMs:     getEnvInt("GITHUB_API_DELAY_MS", 100),
-		QueueBatchSize:       getEnvInt("QUEUE_BATCH_SIZE", 10),
+		RedisURL:              getEnv("REDIS_URL", "redis://localhost:6379"),
+		GitHubOrg:             os.Getenv("GITHUB_ORG"),
+		GitHubToken:           os.Getenv("GITHUB_TOKEN"),
+		FetchSchedule:         getEnv("FETCH_SCHEDULE", "0 0 * * 0"), // Weekly on Sunday
+		FetchOnStartup:        getEnvBool("FETCH_ON_STARTUP", true),
+		MaxConcurrentSyncs:    getEnvInt("MAX_CONCURRENT_SYNCS", 3),
+		SyncTimeoutMinutes:    getEnvInt("SYNC_TIMEOUT_MINUTES", 30),
+		SharedVolumePath:      getEnv("SHARED_VOLUME_PATH", "/shared/heimdall-repos"),
+		TruffleHogQueueName:   getEnv("TRUFFLEHOG_QUEUE_NAME", "trufflehog_queue"),
+		OSVQueueName:          getEnv("OSV_QUEUE_NAME", "osv_queue"),
+		GitHubAPIDelayMs:      getEnvInt("GITHUB_API_DELAY_MS", 100),
+		QueueBatchSize:        getEnvInt("QUEUE_BATCH_SIZE", 10),
+		EnableScannerQueues:   getEnvBool("ENABLE_SCANNER_QUEUES", true),
+		EnableTruffleHogQueue: getEnvBool("ENABLE_TRUFFLEHOG_QUEUE", true),
+		EnableOSVQueue:        getEnvBool("ENABLE_OSV_QUEUE", true),
 	}
 
 	if cfg.GitHubOrg == "" {
@@ -48,7 +51,10 @@ func main() {
 		slog.String("schedule", cfg.FetchSchedule),
 		slog.Bool("fetch_on_startup", cfg.FetchOnStartup),
 		slog.Int("max_concurrent_syncs", cfg.MaxConcurrentSyncs),
-		slog.String("shared_volume", cfg.SharedVolumePath))
+		slog.String("shared_volume", cfg.SharedVolumePath),
+		slog.Bool("enable_scanner_queues", cfg.EnableScannerQueues),
+		slog.Bool("enable_trufflehog_queue", cfg.EnableTruffleHogQueue),
+		slog.Bool("enable_osv_queue", cfg.EnableOSVQueue))
 
 	// Parse Redis URL
 	opt, err := redis.ParseURL(cfg.RedisURL)

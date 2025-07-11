@@ -57,18 +57,21 @@ type OSVScannerConfig struct {
 
 // SyncConfig holds the sync service configuration
 type SyncConfig struct {
-	RedisURL             string
-	GitHubOrg            string
-	GitHubToken          string
-	FetchSchedule        string
-	FetchOnStartup       bool
-	MaxConcurrentSyncs   int
-	SyncTimeoutMinutes   int
-	SharedVolumePath     string
-	TruffleHogQueueName  string
-	OSVQueueName         string
-	GitHubAPIDelayMs     int
-	QueueBatchSize       int
+	RedisURL              string
+	GitHubOrg             string
+	GitHubToken           string
+	FetchSchedule         string
+	FetchOnStartup        bool
+	MaxConcurrentSyncs    int
+	SyncTimeoutMinutes    int
+	SharedVolumePath      string
+	TruffleHogQueueName   string
+	OSVQueueName          string
+	GitHubAPIDelayMs      int
+	QueueBatchSize        int
+	EnableScannerQueues   bool
+	EnableTruffleHogQueue bool
+	EnableOSVQueue        bool
 }
 
 

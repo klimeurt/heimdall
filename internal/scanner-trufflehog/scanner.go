@@ -164,7 +164,9 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
 		err := fmt.Errorf("clone path does not exist: %s", repoDir)
 		// Still send coordination message even if path is missing
-		s.sendCoordinationMessage(ctx, workerID, processedRepo, "failed", startTime)
+		if coordErr := s.sendCoordinationMessage(ctx, workerID, processedRepo, "failed", startTime); coordErr != nil {
+			log.Printf("Scanner Worker %d: Failed to send coordination message for missing path %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, coordErr)
+		}
 		return s.handleScanError(ctx, workerID, processedRepo, startTime, err)
 	}
 
@@ -375,33 +377,6 @@ func (s *Scanner) handleScanError(ctx context.Context, workerID int, processedRe
 	return err // Return original error
 }
 
-// Helper functions to safely extract fields from JSON
-func getStringField(data map[string]interface{}, field string) string {
-	if val, ok := data[field]; ok {
-		if str, ok := val.(string); ok {
-			return str
-		}
-	}
-	return ""
-}
-
-func getIntField(data map[string]interface{}, field string) int {
-	if val, ok := data[field]; ok {
-		if num, ok := val.(float64); ok {
-			return int(num)
-		}
-	}
-	return 0
-}
-
-func getBoolField(data map[string]interface{}, field string) bool {
-	if val, ok := data[field]; ok {
-		if b, ok := val.(bool); ok {
-			return b
-		}
-	}
-	return false
-}
 
 // sendCoordinationMessage sends a message to the coordinator when scanning is complete
 func (s *Scanner) sendCoordinationMessage(ctx context.Context, workerID int, processedRepo *collector.ProcessedRepository, status string, startTime time.Time) error {

@@ -150,7 +150,9 @@ func (s *Scanner) scanRepository(ctx context.Context, workerID int, processedRep
 	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
 		err := fmt.Errorf("clone path does not exist: %s", repoDir)
 		// Still send coordination message even if path is missing
-		s.sendCoordinationMessage(ctx, workerID, processedRepo, "failed", startTime)
+		if coordErr := s.sendCoordinationMessage(ctx, workerID, processedRepo, "failed", startTime); coordErr != nil {
+			log.Printf("OSV Scanner Worker %d: Failed to send coordination message for missing path %s/%s: %v", workerID, processedRepo.Org, processedRepo.Name, coordErr)
+		}
 		return s.handleScanError(ctx, workerID, processedRepo, startTime, err)
 	}
 
